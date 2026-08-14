@@ -1,0 +1,21 @@
+Tornedo makes use of the following open-source projects:
+
+Torlink
+  https://github.com/baairon/torlink
+  MIT License. Used as design and research reference for the federated search
+  architecture and several source scraping patterns. Where its code informed
+  Tornedo adapters, the logic was re-implemented and adapted; Torlink remains
+  credited for its contribution.
+
+WebTorrent
+  https://github.com/webtorrent/webtorrent
+  MIT License. The torrent engine used behind Tornedo's TorrentClient
+  abstraction.
+
+parse-torrent
+  https://github.com/webtorrent/parse-torrent
+  MIT License. Used for magnet/.torrent parsing.
+
+better-sqlite3
+  https://github.com/WiseLibs/better-sqlite3
+  MIT License. The SQLite driver for persistence.
