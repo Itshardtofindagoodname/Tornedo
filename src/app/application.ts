@@ -85,11 +85,17 @@ export class Application {
       engine: this.searchEngine,
       healthSources: this.healthSources,
       getRank: () => this.configState.ranking,
+      getSources: () => this.sources,
     });
   }
 
   getConfig(): TornedoConfig {
     return this.configState;
+  }
+
+  /** The torrent engine client (used by diagnostics/doctor). */
+  getClient(): TorrentClient {
+    return this.client;
   }
 
   isSourceEnabled(id: string): boolean {

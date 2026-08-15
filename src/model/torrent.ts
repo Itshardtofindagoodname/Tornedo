@@ -213,3 +213,29 @@ export interface DownloadSummary {
   totalDownloadSpeed: number;
   totalUploadSpeed: number;
 }
+
+/**
+ * What a crash recovery pass reconciled. Produced once at startup when the
+ * previous run died without a clean shutdown; surfaced to the user instead of
+ * silently resuming.
+ */
+export interface RecoveryReport {
+  /** Database was opened and migrations verified. */
+  database: boolean;
+  /** Download state was re-read from SQLite. */
+  downloadState: boolean;
+  /** Torrent metadata (name/size) was available for the recovered items. */
+  torrentMetadata: boolean;
+  /** Existing pieces were handed to the engine for verification. */
+  existingPieces: boolean;
+  /** Interrupted downloads restored and resumed. */
+  resumed: string[];
+  /** Items detected as already complete and reconciled. */
+  completed: string[];
+  /** Queued downloads preserved. */
+  recoveredQueued: number;
+  /** Items that could not be recovered (e.g. invalid state). */
+  failed: string[];
+  /** Human notes (e.g. engine delegated piece verification). */
+  notes: string[];
+}

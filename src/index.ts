@@ -22,6 +22,34 @@ export {
 } from "./config/config.js";
 export { configFile, dbFile, defaultDownloadDir } from "./config/paths.js";
 
+export { analyzeQuery, isConfident, describeInference } from "./media/query.js";
+export { toMediaEntity, formatEntity } from "./media/entity.js";
+export { parseTitle } from "./media/title.js";
+export { classifyMedia } from "./media/classify.js";
+
+export {
+  defaultSortSpec,
+  SORT_OPTIONS,
+  describeFilter,
+  sortLabel,
+  parseFilterText,
+  filterToQueryText,
+  sortReleases,
+  releaseMatches,
+  type ReleaseFilter,
+  type SortSpec,
+  type SortOption,
+} from "./results/filter.js";
+export {
+  buildReleases,
+  buildGroups,
+  applyFilter,
+  sortBySpec,
+  defaultRankContext,
+  type PipelineOptions,
+} from "./results/pipeline.js";
+export { runDoctor, renderDoctor, type DoctorReport, type DoctorCheck } from "./diagnostics/doctor.js";
+
 export type {
   MediaCategory,
   Release,
@@ -30,6 +58,9 @@ export type {
   NormalizedResult,
   ReleaseMetadata,
   AudioMetadata,
+  InferredQuery,
+  MediaEntity,
+  GameMetadata,
 } from "./model/search.js";
 export type {
   TorrentItem,
@@ -38,6 +69,7 @@ export type {
   TorrentMeta,
   AddTorrentInput,
   DownloadSummary,
+  RecoveryReport,
 } from "./model/torrent.js";
 export type { SourceAdapter, SourceGroup, SearchContext, SearchEmitter, SearchSummary, SearchRequest, SourceFailure } from "./model/source.js";
 export { normalizeInfoHash, buildMagnet, parseInput, parseMagnet, parseTorrentBuffer } from "./torrent/parse.js";

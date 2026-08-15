@@ -64,6 +64,21 @@ export class SearchEngine {
 
   private runSource(source: SourceAdapter, query: string, signal: AbortSignal): Promise<SourceOutcome> {
     const timeoutMs = source.timeoutMs > 0 ? source.timeoutMs : this.opts.defaultTimeoutMs;
+    // Transient failures (timeout / outage / 5xx) get one bounded retry with a
+    // short backoff; parse, unsupported and cancelled failures never retry. A
+    // failing source can never take down the search — this only delays its
+    // outcome by one extra timeout window at worst.
+    const maxAttempts = 2;
+    return this.attemptSource(source, query, signal, timeoutMs, maxAttempts);
+  }
+
+  private async attemptSource(
+    source: SourceAdapter,
+    query: string,
+    signal: AbortSignal,
+    timeoutMs: number,
+    attemptsLeft: number,
+  ): Promise<SourceOutcome> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const onOuterAbort = (): void => controller.abort();
@@ -71,43 +86,57 @@ export class SearchEngine {
     signal.addEventListener("abort", onOuterAbort, { once: true });
 
     const ctx: SearchContext = { signal: controller.signal, timeoutMs };
-    return Promise.resolve()
-      .then(() => source.search(query, ctx))
-      .then(
-        (results): SourceOutcome => {
-          if (controller.signal.aborted && !signal.aborted) {
-            return { sourceId: source.id, failure: { kind: "timeout", message: `Timed out after ${timeoutMs}ms` } };
-          }
-          return { sourceId: source.id, results: Array.isArray(results) ? results : [] };
-        },
-        (err): SourceOutcome => {
-          if (signal.aborted) {
-            return { sourceId: source.id, failure: { kind: "cancelled", message: "Search cancelled" } };
-          }
-          if (controller.signal.aborted) {
-            return { sourceId: source.id, failure: { kind: "timeout", message: `Timed out after ${timeoutMs}ms` } };
-          }
-          if (err instanceof CancelledError) {
-            return { sourceId: source.id, failure: { kind: "cancelled", message: err.message } };
-          }
-          if (err instanceof ParseError) {
-            return { sourceId: source.id, failure: { kind: "parse", message: err.message } };
-          }
-          if (err instanceof UnsupportedError) {
-            return { sourceId: source.id, failure: { kind: "unsupported", message: err.message } };
-          }
-          const status = (err as { status?: number })?.status;
-          const kind = typeof status === "number" && status >= 400 ? "http" : "unavailable";
-          return {
-            sourceId: source.id,
-            failure: { kind, message: err instanceof Error ? err.message : String(err) },
-          };
-        },
-      )
-      .finally(() => {
-        clearTimeout(timer);
-        signal.removeEventListener("abort", onOuterAbort);
-      });
+    let retryable = false;
+    try {
+      const outcome = await Promise.resolve()
+        .then(() => source.search(query, ctx))
+        .then(
+          (results): SourceOutcome => {
+            if (controller.signal.aborted && !signal.aborted) {
+              return { sourceId: source.id, failure: { kind: "timeout", message: `Timed out after ${timeoutMs}ms` } };
+            }
+            return { sourceId: source.id, results: Array.isArray(results) ? results : [] };
+          },
+          (err): SourceOutcome => {
+            if (signal.aborted) {
+              return { sourceId: source.id, failure: { kind: "cancelled", message: "Search cancelled" } };
+            }
+            if (controller.signal.aborted) {
+              retryable = true;
+              return { sourceId: source.id, failure: { kind: "timeout", message: `Timed out after ${timeoutMs}ms` } };
+            }
+            if (err instanceof CancelledError) {
+              return { sourceId: source.id, failure: { kind: "cancelled", message: err.message } };
+            }
+            if (err instanceof ParseError) {
+              return { sourceId: source.id, failure: { kind: "parse", message: err.message } };
+            }
+            if (err instanceof UnsupportedError) {
+              return { sourceId: source.id, failure: { kind: "unsupported", message: err.message } };
+            }
+            const status = (err as { status?: number })?.status;
+            const kind = typeof status === "number" && status >= 400 ? "http" : "unavailable";
+            retryable = kind === "http" ? (typeof status === "number" ? status >= 500 : false) : true;
+            return {
+              sourceId: source.id,
+              failure: { kind, message: err instanceof Error ? err.message : String(err) },
+            };
+          },
+        );
+
+      if (outcome.failure && retryable && attemptsLeft > 1 && !signal.aborted) {
+        await this.delay(250);
+        return this.attemptSource(source, query, signal, timeoutMs, attemptsLeft - 1);
+      }
+      return outcome;
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onOuterAbort);
+    }
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /**

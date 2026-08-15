@@ -6,6 +6,7 @@ import type { CliContext } from "./context.js";
 import { USAGE } from "./help.js";
 import { runAdd } from "./commands/add.js";
 import { runConfig } from "./commands/config.js";
+import { runDoctorCommand } from "./commands/doctor.js";
 import { runDownloads } from "./commands/downloads.js";
 import { runSearch } from "./commands/search.js";
 import { runSources } from "./commands/sources.js";
@@ -33,6 +34,8 @@ export async function dispatch(ctx: CliContext): Promise<number> {
       return runWatch(ctx, positional[0]);
     case "sources":
       return runSources(ctx);
+    case "doctor":
+      return runDoctorCommand(ctx);
     case "help":
       ctx.stdout(USAGE);
       return 0;

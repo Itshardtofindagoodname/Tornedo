@@ -9,7 +9,7 @@ import type { TorrentItem } from "../model/torrent.js";
 import { metadataKnown } from "../model/torrent.js";
 import { formatBytes, formatPercent, formatRate } from "../utils/bytes.js";
 import { formatDuration } from "../utils/duration.js";
-import { ProgressBar } from "./components.js";
+import { AnimatedProgress } from "./components.js";
 import { statusColor, statusGlyph } from "./format.js";
 import { palette } from "./theme.js";
 import { scrollWindow } from "./text.js";
@@ -18,9 +18,10 @@ export interface DownloadsViewProps {
   app: Application;
   selected: number;
   diagnostics: boolean;
+  tick: number;
 }
 
-export function DownloadsView({ app, selected, diagnostics }: DownloadsViewProps): React.ReactNode {
+export function DownloadsView({ app, selected, diagnostics, tick }: DownloadsViewProps): React.ReactNode {
   const items = app.manager.list();
   const summary = app.manager.summary();
   const len = items.length;
@@ -58,7 +59,7 @@ export function DownloadsView({ app, selected, diagnostics }: DownloadsViewProps
         ) : (
           items.slice(start, start + count).map((it, i) => {
             const idx = start + i;
-            return <DownloadRow key={it.id} item={it} selected={idx === sel} />;
+            return <DownloadRow key={it.id} item={it} selected={idx === sel} tick={tick} />;
           })
         )}
       </Box>
@@ -67,7 +68,7 @@ export function DownloadsView({ app, selected, diagnostics }: DownloadsViewProps
   );
 }
 
-function DownloadRow({ item, selected }: { item: TorrentItem; selected: boolean }): React.ReactNode {
+function DownloadRow({ item, selected, tick }: { item: TorrentItem; selected: boolean; tick: number }): React.ReactNode {
   const color = statusColor(item.status);
   // Metadata is not known yet: never present fake 0 B / 0 B or 0/0.
   const timedOut = item.diagnostics?.metadata === "timeout";
@@ -102,9 +103,11 @@ function DownloadRow({ item, selected }: { item: TorrentItem; selected: boolean 
         </Text>
       </Box>
       <Box width={10}>
-        <ProgressBar
+        <AnimatedProgress
           progress={resolving || timedOut ? 0 : item.progress}
           width={10}
+          active={item.status === "downloading"}
+          tick={tick}
           color={selected ? palette.bg : color}
         />
       </Box>

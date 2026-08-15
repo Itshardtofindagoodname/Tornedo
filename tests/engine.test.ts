@@ -117,6 +117,53 @@ describe("SearchEngine", () => {
     await expect(promise).rejects.toBeInstanceOf(CancelledError);
   });
 
+  it("retries a transient 5xx failure once and then succeeds", async () => {
+    let calls = 0;
+    const flaky: SourceAdapter = {
+      id: "flaky",
+      name: "Flaky",
+      groups: ["Movies"],
+      categories: ["Movie"],
+      homepage: "https://example.com/flaky",
+      timeoutMs: 500,
+      concurrency: 1,
+      reportsHealth: true,
+      async search() {
+        calls++;
+        if (calls === 1) throw Object.assign(new Error("500"), { status: 500 });
+        return [result({ infohash: "aa".repeat(20), title: "Recovered" })];
+      },
+    };
+    const engine = makeEngine([flaky]);
+    const { summary, events } = await collect(engine, { query: "x" });
+    expect(calls).toBe(2);
+    expect(summary.sourcesSucceeded).toBe(1);
+    expect(events).toContain("ok:flaky:1");
+  });
+
+  it("does not retry parse failures", async () => {
+    let calls = 0;
+    const broken: SourceAdapter = {
+      id: "broken",
+      name: "Broken",
+      groups: ["Movies"],
+      categories: ["Movie"],
+      homepage: "https://example.com/broken",
+      timeoutMs: 500,
+      concurrency: 1,
+      reportsHealth: true,
+      async search() {
+        calls++;
+        throw new ParseError("structure changed");
+      },
+    };
+    const engine = makeEngine([broken]);
+    const { summary } = await collect(engine, { query: "x" });
+    expect(calls).toBe(1);
+    expect(summary.sourcesFailed).toBe(1);
+    expect(summary.sourcesSucceeded).toBe(0);
+  });
+
   it("emits results progressively as sources settle", async () => {
     const ordered: string[] = [];
     const slow = fakeSource("slow", "Slow", [result({ infohash: "bb".repeat(20), title: "Y" })], { delayMs: 60 });

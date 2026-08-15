@@ -11,6 +11,7 @@ export const COMMANDS = [
   "file",
   "watch",
   "sources",
+  "doctor",
   "help",
   "version",
   "tui",

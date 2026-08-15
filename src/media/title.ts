@@ -11,6 +11,8 @@ export interface ParsedTitle {
   year?: number;
   season?: number;
   episode?: number;
+  /** Episode range for multi-episode packs, e.g. "1-24". */
+  episodeRange?: string;
   quality?: string;
   resolution?: string;
   codec?: string;
@@ -23,6 +25,10 @@ export interface ParsedTitle {
   subtitles: string[];
   hdr: boolean;
   is3d: boolean;
+  /** Games: platform (PC, PS5, Switch, ...). */
+  platform?: string;
+  /** Games: version / update marker. */
+  version?: string;
   /** Lowercase alphanumeric key for grouping. */
   normalizedKey: string;
 }
@@ -146,6 +152,10 @@ const SEASON_EPISODE_RE = /\bs(\d{1,2})\s*e(\d{1,3})\b/i;
 const SEASON_RE = /\bs(\d{1,2})\b/i;
 const SEASON_WORD_RE = /\bseason\s+(\d{1,2})\b/i;
 const EPISODE_WORD_RE = /\b(?:episode|ep)\.?\s+(\d{1,3})\b/i;
+/** Combined "S02E01-E03" range (season + start/end episode). */
+const SEASON_EPISODE_RANGE_RE = /\bs(\d{1,2})\s*e(\d{1,3})\s*[-–]\s*e(\d{1,3})\b/i;
+/** Standalone "E01-E24" / "Eps 1-24" range. */
+const EPISODE_RANGE_RE = /\be(?:p?\.?)?\s*(\d{1,3})\s*[-–]\s*(\d{1,3})\b/i;
 const ANIME_EPISODE_RE = /[-–]\s*(\d{1,3})(?=\s*\(?\s*\d{3,4}p)/i;
 const RESOLUTION_RE = /\b(\d{3,4})[x×](\d{3,4})\b/;
 const QUALITY_RE = /\b(4320p|2160p|1440p|1080p|720p|540p|480p|360p)\b/i;
@@ -158,6 +168,31 @@ const CONTAINER_RE = /\b(mkv|mp4|avi|m2ts|webm|ogm|mov)\b/i;
 const SOURCE_RE =
   /\b(web[-_. ]?dl|web[-_. ]?rip|blu[-_. ]?ray|bdr|br[-_. ]?rip|bd[-_. ]?rip|hdrip|dvd[-_. ]?rip|hdtv|hdtv[-_. ]?rip|sat[-_. ]?rip|pdtv|telesync|cam[-_. ]?rip|hdts|remux|ppv|hmax|amzn|netflix|disney[-_. ]?plus|itunes)\b/i;
 const SUBTITLE_RE = /\b(multi?lang|dual|multi)?\s*(?:subs?|subtitles?|subbed)\b/i;
+/** Game platforms (longest first so "Xbox One" beats "Xbox", "PS Vita" beats "PS5"). */
+const PLATFORM_PATTERNS: { re: RegExp; platform: string }[] = [
+  { re: /\bxbox[-_. ]?series[-_. ]?x\b/i, platform: "Xbox Series X" },
+  { re: /\bxbox[-_. ]?series[-_. ]?s\b/i, platform: "Xbox Series S" },
+  { re: /\bxbox[-_. ]?360\b/i, platform: "Xbox 360" },
+  { re: /\bxbox[-_. ]?one\b/i, platform: "Xbox One" },
+  { re: /\bxbox\b/i, platform: "Xbox" },
+  { re: /\bplaystation[-_. ]?5\b|\bps5\b/i, platform: "PS5" },
+  { re: /\bplaystation[-_. ]?4\b|\bps4\b/i, platform: "PS4" },
+  { re: /\bplaystation[-_. ]?3\b|\bps3\b/i, platform: "PS3" },
+  { re: /\bplaystation[-_. ]?vita\b|\bps[-_. ]?vita\b/i, platform: "PS Vita" },
+  { re: /\bplaystation\b/i, platform: "PlayStation" },
+  { re: /\bnintendo[-_. ]?switch\b|\bswitch\b/i, platform: "Switch" },
+  { re: /\bwii[-_. ]?u\b/i, platform: "Wii U" },
+  { re: /\bwii\b/i, platform: "Wii" },
+  { re: /\b3ds\b/i, platform: "3DS" },
+  { re: /\bnds\b/i, platform: "DS" },
+  { re: /\bgame[-_. ]?boy[-_. ]?advance\b|\bgba\b/i, platform: "GBA" },
+  { re: /\bsuper[-_. ]?nintendo\b|\bsnes\b/i, platform: "SNES" },
+  { re: /\bnintendo[-_. ]?64\b|\bn64\b/i, platform: "N64" },
+  { re: /\bgame[-_. ]?cube\b/i, platform: "GameCube" },
+  { re: /\bnes\b/i, platform: "NES" },
+  { re: /\b(?:pc|steam|gog|epic|origin|vr)\b/i, platform: "PC" },
+];
+const VERSION_RE = /\b(?:v|ver\.?|version|update|build)\s*(\d+(?:[. ]\d+){0,3}(?:[a-z])?)\b/i;
 
 function qualityFromUhd(u: string): string {
   if (/^8k$/i.test(u)) return "4320p";
@@ -214,14 +249,29 @@ export function parseTitle(raw: string): ParsedTitle {
     }
   }
 
-  // Season / episode.
+  // Season / episode. Multi-episode ranges ("S02E01-E24", "Eps 1-24") are
+  // detected first so the combined "S02E01-E03" form keeps its range instead of
+  // only the start episode.
   {
+    const mRangeCombined = SEASON_EPISODE_RANGE_RE.exec(work);
+    if (mRangeCombined) {
+      parsed.season = Number(mRangeCombined[1]);
+      parsed.episode = Number(mRangeCombined[2]);
+      parsed.episodeRange = `${Number(mRangeCombined[2])}-${Number(mRangeCombined[3])}`;
+      work = blankOut(work, mRangeCombined.index, mRangeCombined[0].length);
+    }
+    const mRange = EPISODE_RANGE_RE.exec(work);
+    if (mRange) {
+      parsed.episode = Number(mRange[1]);
+      parsed.episodeRange = `${Number(mRange[1])}-${Number(mRange[2])}`;
+      work = blankOut(work, mRange.index, mRange[0].length);
+    }
     const m = SEASON_EPISODE_RE.exec(work);
     if (m) {
       parsed.season = Number(m[1]);
-      parsed.episode = Number(m[2]);
+      if (parsed.episode === undefined) parsed.episode = Number(m[2]);
       work = blankOut(work, m.index, m[0].length);
-    } else {
+    } else if (parsed.episode === undefined) {
       const m2 = SEASON_WORD_RE.exec(work) ?? SEASON_RE.exec(work);
       if (m2 && parsed.season === undefined) {
         parsed.season = Number(m2[1]);
@@ -258,6 +308,9 @@ export function parseTitle(raw: string): ParsedTitle {
     if (uhd) {
       parsed.quality = qualityFromUhd(uhd.m[1]!);
       work = uhd.work;
+      // The numeric token (2160p/4320p) usually accompanies the UHD tag.
+      const num = matchWork(work, QUALITY_RE);
+      if (num) work = num.work;
     } else {
       const res = matchWork(work, QUALITY_RE);
       if (res) {
@@ -311,6 +364,24 @@ export function parseTitle(raw: string): ParsedTitle {
     if (res) {
       parsed.source = sourceLabel(res.m[1]!);
       work = res.work;
+    }
+  }
+
+  // Game platform / version.
+  {
+    for (const { re, platform } of PLATFORM_PATTERNS) {
+      const m = re.exec(work);
+      if (m) {
+        parsed.platform = platform;
+        work = blankOut(work, m.index, m[0].length);
+        break;
+      }
+    }
+    const vm = matchWork(work, VERSION_RE);
+    if (vm) {
+      // Separator normalization turned "v2.1" into "v2 1" — restore the dots.
+      parsed.version = vm.m[1]!.replace(/\s+/g, ".");
+      work = vm.work;
     }
   }
 

@@ -5,6 +5,7 @@
 import type { CliContext } from "../context.js";
 import { searchToJson, renderSearchTable, type SourceReport } from "../render.js";
 import { MEDIA_CATEGORIES, type MediaCategory } from "../../model/search.js";
+import { describeInference, isConfident } from "../../media/query.js";
 
 const HEALTH_GLYPH: Record<SourceReport["health"], string> = {
   healthy: "●",
@@ -26,6 +27,13 @@ export async function runSearch(ctx: CliContext, query: string): Promise<number>
     category,
   );
   const printed = new Set<string>();
+
+  if (!ctx.args.json) {
+    const inferred = session.inference();
+    if (isConfident(inferred)) {
+      ctx.log(`understood: ${describeInference(inferred) ?? inferred.mediaType ?? inferred.title ?? "search"}\n`);
+    }
+  }
 
   const off = session.onChange(() => {
     for (const [sourceId, report] of session.sourceReports()) {

@@ -18,6 +18,7 @@ COMMANDS
   config            Show configuration (JSON)
   sources           List search sources and their enabled state
   sources --check   Diagnose configured Torznab / Internet Archive providers
+  doctor            Inspect the installation and report problems
   tui               Launch the terminal UI (default when no command)
   help              Show this help
   version           Print the version
@@ -44,6 +45,7 @@ EXAMPLES
   tornedo magnet "magnet:?xt=urn:btih:..."
   tornedo file ./movie.torrent
   tornedo watch ~/torrent-drop
+  tornedo doctor
   tornedo config set maxActiveDownloads 5
   tornedo sources --check
 

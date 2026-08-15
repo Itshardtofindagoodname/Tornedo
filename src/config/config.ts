@@ -20,6 +20,9 @@ export type KeyAction =
   | "remove"
   | "toggleSeed"
   | "filter"
+  | "category"
+  | "sort"
+  | "menu"
   | "copyMagnet"
   | "help"
   | "back"
@@ -43,6 +46,9 @@ export const KEY_ACTIONS: readonly KeyAction[] = [
   "remove",
   "toggleSeed",
   "filter",
+  "category",
+  "sort",
+  "menu",
   "copyMagnet",
   "help",
   "back",
@@ -116,6 +122,10 @@ export interface TornedoConfig {
   keybindings: Partial<Record<KeyAction, string[]>>;
   /** Watch-mode poll interval in ms. */
   watchIntervalMs: number;
+  /** `tornedo doctor` warns when free disk space drops below this (MiB). */
+  diskSpaceWarningMb: number;
+  /** Whether interrupted downloads auto-resume after a crash. */
+  recoveryAutoResume: boolean;
   /** User-configured Torznab-compatible endpoints. */
   torznabProviders: TorznabProviderConfig[];
   /** Internet Archive provider settings. */
@@ -138,6 +148,9 @@ export function defaultKeybindings(): Partial<Record<KeyAction, string[]>> {
     remove: ["x"],
     toggleSeed: ["s"],
     filter: ["ctrl+f"],
+    category: ["c"],
+    sort: ["o"],
+    menu: ["m"],
     copyMagnet: ["y"],
     help: ["?"],
     back: ["esc"],
@@ -166,6 +179,8 @@ export function defaultConfig(): TornedoConfig {
     theme: "default",
     keybindings: defaultKeybindings(),
     watchIntervalMs: 2_000,
+    diskSpaceWarningMb: 1_024,
+    recoveryAutoResume: true,
     torznabProviders: [],
     internetArchive: {
       enabled: false,
@@ -184,6 +199,8 @@ const SOURCE_KEYS: (keyof TornedoConfig)[] = [
   "seedAfterComplete",
   "theme",
   "watchIntervalMs",
+  "diskSpaceWarningMb",
+  "recoveryAutoResume",
 ];
 
 function isRanking(v: unknown): v is RankingConfig {
@@ -221,6 +238,8 @@ export function normalizeConfig(raw: unknown): TornedoConfig {
     const v = r[key];
     if (key === "downloadDir") {
       if (typeof v === "string" && v.trim()) out.downloadDir = v.trim();
+    } else if (key === "seedAfterComplete" || key === "recoveryAutoResume") {
+      if (typeof v === "boolean") (out as unknown as Record<string, unknown>)[key] = v;
     } else if (typeof v === "number" && Number.isFinite(v) && v >= 0) {
       (out as unknown as Record<string, unknown>)[key as string] = v;
     }

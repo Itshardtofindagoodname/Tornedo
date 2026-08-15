@@ -36,6 +36,85 @@ export const CATEGORY_SORT_ORDER: Readonly<Record<MediaCategory, number>> = {
   Other: 7,
 };
 
+/**
+ * What Tornedo thinks the user meant by a search query. Produced by query
+ * analysis (src/media/query.ts); never asserted with false confidence — every
+ * field carries the evidence that produced it and an overall confidence.
+ */
+export interface InferredQuery {
+  /** Best-guess media type, when the evidence is strong enough. */
+  mediaType?: MediaCategory;
+  /** Cleaned title of the thing the user is looking for. */
+  title?: string;
+  /** Music: the artist part of an "artist - album" query. */
+  artist?: string;
+  /** Music: the album part of an "artist - album" query. */
+  album?: string;
+  /** Movie title, when classified as a movie. */
+  movie?: string;
+  /** TV show title, when classified as TV. */
+  tvShow?: string;
+  /** Anime title, when classified as anime. */
+  anime?: string;
+  /** Game title, when classified as a game. */
+  game?: string;
+  year?: number;
+  season?: number;
+  episode?: number;
+  /** "1080p", "2160p", ... */
+  quality?: string;
+  /** "3840x2160", ... */
+  resolution?: string;
+  /** h264, h265, xvid, ... */
+  codec?: string;
+  language?: string;
+  /** Games: platform (PS5, Switch, PC, ...). */
+  platform?: string;
+  /** Human-readable list of what was detected, for display. */
+  signals: string[];
+  /** 0..1 — how sure the analyzer is about the whole parse. */
+  confidence: number;
+}
+
+/** Video game release facts (platform, version) parsed from game titles. */
+export interface GameMetadata {
+  /** Platform: PC, PS4, PS5, Xbox, Switch, Nintendo, VR, ... */
+  platform?: string;
+  /** Version/update/build markers, e.g. "v1.2.3", "Update 2". */
+  version?: string;
+  /** Repack/deluxe/goty style release modifiers. */
+  edition?: string;
+}
+
+/** Structured "media intelligence": a release as a normalized media entity. */
+export interface MediaEntity {
+  kind: "movie" | "tv" | "anime" | "music" | "game" | "audiobook" | "podcast" | "other";
+  title: string;
+  year?: number;
+  resolution?: string;
+  quality?: string;
+  codec?: string;
+  container?: string;
+  source?: string;
+  audio?: string;
+  size?: number;
+  seeds?: number;
+  /** Music. */
+  artist?: string;
+  album?: string;
+  track?: string;
+  bitrate?: number;
+  sampleRate?: number;
+  lossless?: boolean;
+  /** TV / anime. */
+  season?: number;
+  episode?: number;
+  episodeRange?: string;
+  /** Games. */
+  platform?: string;
+  version?: string;
+}
+
 /** Audio metadata recognized from release titles. Audio is a first-class field. */
 export interface AudioMetadata {
   /** Codec family, e.g. "AAC", "AC3", "DTS", "FLAC", "MP3", "Opus". */
@@ -90,6 +169,10 @@ export interface ReleaseMetadata {
   album?: string;
   /** For music: track title. */
   track?: string;
+  /** For TV/anime: episode range ("1-24", "Complete"). */
+  episodeRange?: string;
+  /** For games: platform, version, edition. */
+  game?: GameMetadata;
 }
 
 /** A single result as reported by one source, before normalization. */
@@ -137,6 +220,8 @@ export interface NormalizedResult {
   sources: string[];
   /** Unix seconds, earliest observed. */
   added?: number;
+  /** Media intelligence entity (see src/media/entity.ts). */
+  entity?: MediaEntity;
   /** Preserved provider-specific metadata (see SearchResult.sourceMetadata). */
   sourceMetadata?: Record<string, unknown>;
 }
@@ -158,6 +243,8 @@ export interface Release {
   added?: number;
   /** Aggregate ranking score (higher = better). */
   score: number;
+  /** Media intelligence entity (see src/media/entity.ts), set by the pipeline. */
+  entity?: MediaEntity;
   /** Preserved provider-specific metadata (see SearchResult.sourceMetadata). */
   sourceMetadata?: Record<string, unknown>;
 }

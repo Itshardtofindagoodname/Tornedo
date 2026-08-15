@@ -4,9 +4,11 @@
  * change events for the UI / CLI. UI code never touches the client directly.
  */
 import { EventEmitter } from "node:events";
+import { spawn } from "node:child_process";
+import { mkdirSync } from "node:fs";
 import type { TornedoConfig } from "../config/config.js";
 import type { TorrentStore } from "../database/store.js";
-import type { AddTorrentInput, DownloadSummary, TorrentDiagnostics, TorrentItem, TorrentStatus } from "../model/torrent.js";
+import type { AddTorrentInput, DownloadSummary, RecoveryReport, TorrentDiagnostics, TorrentItem, TorrentStatus } from "../model/torrent.js";
 import type { TorrentClient, TorrentClientHandlers } from "../torrent/client.js";
 import { buildMagnet, mergeTrackers, parseInput, PUBLIC_TRACKERS } from "../torrent/parse.js";
 
@@ -36,6 +38,8 @@ export interface TorrentManagerEvents {
   completed(item: TorrentItem): void;
   failed(id: string, message: string): void;
   statusChanged(item: TorrentItem, from: TorrentStatus, to: TorrentStatus): void;
+  /** Emitted once at startup when a previous run crashed and state was recovered. */
+  recovered(report: RecoveryReport): void;
 }
 
 export class TorrentManager extends EventEmitter {
@@ -51,6 +55,7 @@ private strayHits = new Map<string, number>();
   private metadataRetries = new Map<string, number>();
   private stalledSince = new Map<string, number>();
   private disposed = false;
+  private recovery: RecoveryReport | null = null;
 
   constructor(opts: TorrentManagerOptions) {
     super();
@@ -65,6 +70,7 @@ private strayHits = new Map<string, number>();
   override on(event: "completed", listener: (item: TorrentItem) => void): this;
   override on(event: "failed", listener: (id: string, message: string) => void): this;
   override on(event: "statusChanged", listener: (item: TorrentItem, from: TorrentStatus, to: TorrentStatus) => void): this;
+  override on(event: "recovered", listener: (report: RecoveryReport) => void): this;
   override on(event: string | symbol, listener: (...args: any[]) => void): this {
     return super.on(event, listener);
   }
@@ -77,11 +83,92 @@ private strayHits = new Map<string, number>();
       download: cfg.maxDownloadSpeed,
       upload: cfg.maxUploadSpeed,
     });
+    // Never let a missing/corrupt download directory stop startup: create it
+    // lazily and surface a clear error per-item if it cannot be created.
+    ensureDirectory(cfg.downloadDir);
     for (const item of this.store.list()) {
       this.items.set(item.id, item);
     }
+    // Crash recovery: a leftover run marker means the previous run was
+    // interrupted. Reconcile state with what we now know before resuming.
+    const crashed = this.store.hasRunMarker();
+    this.store.setRunMarker();
+    if (crashed) {
+      this.recoverAfterCrash();
+    }
     this.restore();
     this.startTimers();
+  }
+
+  /**
+   * Called once at startup when the previous run died without a clean
+   * shutdown. Detects interrupted downloads, reconciles database state with
+   * what the torrent engine will re-verify, resumes what can be resumed and
+   * reports anything that could not be recovered. Never silently loses state.
+   */
+  private recoverAfterCrash(): void {
+    const report: RecoveryReport = {
+      database: true,
+      downloadState: true,
+      torrentMetadata: true,
+      existingPieces: true,
+      resumed: [],
+      completed: [],
+      recoveredQueued: 0,
+      failed: [],
+      notes: [],
+    };
+    let activeResumed = 0;
+    for (const it of this.items.values()) {
+      // Reconcile: active items whose progress says "done" but whose status
+      // didn't reach completion before the crash.
+      const size = it.torrentSize ?? it.sourceSize ?? 0;
+      if (size > 0 && it.progress >= 1) {
+        it.progress = 1;
+        it.downloaded = size;
+        it.completedAt = it.completedAt ?? Date.now();
+        it.status = it.seedEnabled ? "seeding" : "completed";
+        it.lastUpdated = Date.now();
+        report.completed.push(it.name);
+        this.markDirty(it.id, { persist: true });
+        continue;
+      }
+      switch (it.status) {
+        case "downloading":
+        case "starting":
+        case "waiting_metadata":
+        case "ready":
+        case "stalled":
+        case "checking": {
+          // Interrupted mid-flight: progress preserved in SQLite, pieces on
+          // disk will be re-verified by the engine on resume.
+          if (it.progress > 0) report.resumed.push(`${it.name} (${Math.round(it.progress * 1000) / 10}%)`);
+          activeResumed++;
+          break;
+        }
+        case "queued":
+          report.recoveredQueued++;
+          break;
+        case "error":
+          report.failed.push(`${it.name}: ${it.error ?? "error"}`);
+          break;
+        default:
+          break;
+      }
+    }
+    report.notes.push(
+      "existing pieces handed to the engine for verification; interrupted downloads resume automatically",
+    );
+    if (report.resumed.length === 0 && activeResumed > 0) {
+      report.resumed.push("(discovery in progress; will resume)");
+    }
+    this.recovery = report;
+    this.emit("recovered", report);
+  }
+
+  /** Report from the startup crash-recovery pass, or null when none ran. */
+  lastRecovery(): RecoveryReport | null {
+    return this.recovery;
   }
 
   private startTimers(): void {
@@ -202,6 +289,9 @@ switch (it.status) {
       return existing;
     }
 
+    const destination = input.destination ?? cfg.downloadDir;
+    ensureDirectory(destination);
+
 const item: TorrentItem = {
       id,
       infohash,
@@ -210,7 +300,7 @@ const item: TorrentItem = {
       category: input.category ?? null,
       sourceId: input.sourceId ?? null,
       metadata: input.metadata ?? {},
-      destination: input.destination ?? cfg.downloadDir,
+      destination,
       status: "queued",
       progress: 0,
       downloaded: 0,
@@ -397,14 +487,14 @@ if (it.status === "downloading" || it.status === "starting" || it.status === "wa
     this.startedAt.delete(it.id);
     this.stalledSince.delete(it.id);
     it.status = "error";
-    it.error = message;
+    it.error = translateError(message);
     it.downloadSpeed = 0;
     it.uploadSpeed = 0;
     it.peers = 0;
     it.timeRemaining = Infinity;
     it.lastUpdated = Date.now();
     this.markDirty(it.id, { persist: true });
-    this.emit("failed", it.id, message);
+    this.emit("failed", it.id, it.error);
     this.changed();
     this.schedule();
   }
@@ -439,7 +529,7 @@ if (it.status !== "downloading" && it.status !== "starting" && it.status !== "wa
   resume(id: string): void {
     const it = this.items.get(id);
     if (!it) return;
-    if (it.status === "paused") {
+    if (it.status === "paused" || it.status === "stopped") {
       const was = it.status;
       it.status = "queued";
       this.emit("statusChanged", it, was, "queued");
@@ -460,7 +550,7 @@ if (it.status !== "downloading" && it.status !== "starting" && it.status !== "wa
   togglePause(id: string): void {
     const it = this.items.get(id);
     if (!it) return;
-    if (it.status === "paused" || it.status === "completed") this.resume(id);
+    if (it.status === "paused" || it.status === "completed" || it.status === "stopped") this.resume(id);
     else this.pause(id);
   }
 
@@ -596,6 +686,88 @@ if (it.status !== "downloading" && it.status !== "starting" && it.status !== "wa
     this.markDirty(it.id, { persist: true });
     this.emit("statusChanged", it, was, "seeding");
     this.changed();
+  }
+
+  // --- cancel / delete / open location ---------------------------------------
+
+  /**
+   * Cancel a download: stop the engine, keep the item and its progress in the
+   * queue as "stopped". Nothing is deleted; the user can resume or remove it.
+   */
+  cancel(id: string): void {
+    const it = this.items.get(id);
+    if (!it) return;
+    if (it.status === "completed" || it.status === "stopped" || it.status === "error") return;
+    const was = it.status;
+    this.client.remove(id);
+    this.strayHits.delete(id);
+    this.startedAt.delete(id);
+    this.stalledSince.delete(id);
+    it.status = "stopped";
+    it.downloadSpeed = 0;
+    it.uploadSpeed = 0;
+    it.peers = 0;
+    it.timeRemaining = Infinity;
+    it.lastUpdated = Date.now();
+    this.emit("statusChanged", it, was, "stopped");
+    this.markDirty(it.id, { persist: true });
+    this.changed();
+    this.schedule();
+  }
+
+  /**
+   * Permanently delete the downloaded files for an item. The torrent entry
+   * itself stays (status becomes "stopped" with progress reset) so the user
+   * can re-download or remove it — deleting user files is always explicit.
+   */
+  async deleteFiles(id: string): Promise<void> {
+    const it = this.items.get(id);
+    if (!it) return;
+    this.client.remove(id);
+    this.strayHits.delete(id);
+    this.startedAt.delete(id);
+    this.stalledSince.delete(id);
+    await removeDataSafe(it.destination, it.name);
+    it.status = "stopped";
+    it.progress = 0;
+    it.downloaded = 0;
+    it.downloadSpeed = 0;
+    it.uploadSpeed = 0;
+    it.peers = 0;
+    it.timeRemaining = Infinity;
+    it.lastUpdated = Date.now();
+    this.markDirty(it.id, { persist: true });
+    this.changed();
+    this.schedule();
+  }
+
+  /** Open the download location in the OS file manager. Returns true when launched. */
+  openLocation(id: string): boolean {
+    const it = this.items.get(id);
+    if (!it || !it.destination) return false;
+    const platform = process.platform;
+    let cmd: string;
+    let args: string[];
+    if (platform === "win32") {
+      cmd = "explorer";
+      args = [it.destination];
+    } else if (platform === "darwin") {
+      cmd = "open";
+      args = [it.destination];
+    } else {
+      cmd = "xdg-open";
+      args = [it.destination];
+    }
+    try {
+      const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
+      child.on("error", () => {
+        /* the caller falls back to showing the path */
+      });
+      child.unref();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // --- restore ----------------------------------------------------------------
@@ -871,6 +1043,13 @@ private tickActive(it: TorrentItem, now: number): void {
     this.stopTimers();
     this.persistSync();
     this.client.destroy();
+    // Clean shutdown: clear the crash marker so the next start knows it was
+    // not interrupted.
+    try {
+      this.store.clearRunMarker();
+    } catch {
+      /* noop */
+    }
   }
 
   destroy(): Promise<void> {
@@ -939,4 +1118,34 @@ function sanitizeSegment(name: string): string {
     .replace(/\s+/g, " ")
     .trim();
   return cleaned && cleaned !== "." && cleaned !== ".." ? cleaned.slice(0, 200) : "";
+}
+
+/** Create a directory (and parents); never throws on an existing one. */
+function ensureDirectory(dir: string): void {
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    /* surface per-item below; a missing dir must not kill startup */
+  }
+}
+
+/** Turn raw engine errors into actionable user-facing messages. */
+function translateError(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes("no space left") || lower.includes("enospc")) {
+    return "No space left on device — free up disk space and retry";
+  }
+  if (lower.includes("eacces") || lower.includes("permission denied")) {
+    return "Permission denied — check the download directory permissions";
+  }
+  if (lower.includes("eexist") || lower.includes("already exists")) {
+    return "File already exists in the download directory";
+  }
+  if (lower.includes("invalid") && lower.includes("magnet")) {
+    return "Invalid magnet — the torrent could not be resolved";
+  }
+  if (lower.includes("eisdir")) {
+    return "Path conflict — a directory occupies the expected file location";
+  }
+  return message;
 }

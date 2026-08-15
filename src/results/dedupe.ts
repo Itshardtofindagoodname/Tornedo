@@ -21,6 +21,7 @@ export function emptyRelease(r: NormalizedResult): Release {
     sources: [...r.sources],
     added: r.added,
     score: 0,
+    entity: r.entity,
     sourceMetadata: r.sourceMetadata,
   };
 }
@@ -54,6 +55,7 @@ export function mergeRelease(base: Release, r: NormalizedResult): Release {
     sources: dedupeStrings([...base.sources, ...r.sources]),
     added,
     score: base.score,
+    entity: base.entity ?? r.entity,
     sourceMetadata: base.sourceMetadata ?? r.sourceMetadata,
   };
 }
@@ -91,6 +93,8 @@ function mergeMetadata(a: ReleaseMetadata, b: ReleaseMetadata): ReleaseMetadata 
     artist: a.artist ?? b.artist,
     album: a.album ?? b.album,
     track: a.track ?? b.track,
+    episodeRange: a.episodeRange ?? b.episodeRange,
+    game: a.game ?? b.game,
   };
   return out;
 }

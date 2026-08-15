@@ -324,6 +324,30 @@ export class TorrentStore {
       .run(key, value);
   }
 
+  metaDelete(key: string): void {
+    this.db.prepare("DELETE FROM meta WHERE key = ?").run(key);
+  }
+
+  // --- crash-recovery run marker ---------------------------------------------
+  //
+  // Tornedo writes a marker at startup and clears it only on a clean suspend.
+  // If the process dies (SIGKILL, power loss, crash) the marker survives, so
+  // the next start knows the previous run was interrupted and can reconcile
+  // download state with the filesystem instead of guessing.
+
+  setRunMarker(): void {
+    this.metaSet("run:active", String(Date.now()));
+  }
+
+  clearRunMarker(): void {
+    this.metaDelete("run:active");
+  }
+
+  /** True when a previous run ended without a clean shutdown. */
+  hasRunMarker(): boolean {
+    return this.metaGet("run:active") !== null;
+  }
+
   // --- watch-mode processed-file state ---
 
   watchGet(path: string): { mtime: number; size: number; hash: string } | null {

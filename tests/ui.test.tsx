@@ -8,7 +8,7 @@ import { EventEmitter } from "node:events";
 import { cleanup as inkCleanup, render } from "ink-testing-library";
 import type { Application } from "../src/app/application.js";
 import type { TorrentManager } from "../src/downloads/manager.js";
-import type { TorrentItem, DownloadSummary, AddTorrentInput } from "../src/model/torrent.js";
+import type { TorrentItem, DownloadSummary, AddTorrentInput, RecoveryReport } from "../src/model/torrent.js";
 import { SearchService } from "../src/app/search-service.js";
 import { SearchEngine } from "../src/search/engine.js";
 import { defaultConfig } from "../src/config/config.js";
@@ -17,9 +17,14 @@ import { TornedoApp } from "../src/ui/App.js";
 
 class FakeManager extends EventEmitter {
   items: TorrentItem[] = [];
+  recovery: RecoveryReport | null = null;
 
   list(): TorrentItem[] {
     return this.items;
+  }
+
+  lastRecovery(): RecoveryReport | null {
+    return this.recovery;
   }
 
   summary(): DownloadSummary {
@@ -73,6 +78,11 @@ class FakeManager extends EventEmitter {
   pause(): void {}
   resume(): void {}
   toggleSeeding(): void {}
+  cancel(): void {}
+  openLocation(): boolean {
+    return false;
+  }
+  async deleteFiles(): Promise<void> {}
   async remove(id: string): Promise<void> {
     this.items = this.items.filter((i) => i.id !== id);
     this.emit("update");
@@ -184,5 +194,65 @@ describe("TUI", () => {
     const frame = instance.lastFrame() ?? "";
     expect(frame).toContain("Queued");
     expect((app.manager as unknown as FakeManager).items.length).toBe(1);
+  });
+
+  it("opens the sort selector and changes the sort chip", async () => {
+    const instance = render(<TornedoApp app={makeApp()} />);
+    await wait(30);
+    type(instance, "dune");
+    await wait(30);
+    key(instance, "\r");
+    await wait(80);
+
+    key(instance, "o");
+    await wait(30);
+    expect(instance.lastFrame() ?? "").toContain("sort results");
+
+    key(instance, "\u001B[B");
+    await wait(30);
+    key(instance, "\r");
+    await wait(30);
+    expect(instance.lastFrame() ?? "").toContain("High Seeds");
+  });
+
+  it("opens the category selector and scopes results", async () => {
+    const instance = render(<TornedoApp app={makeApp()} />);
+    await wait(30);
+    type(instance, "dune");
+    await wait(30);
+    key(instance, "\r");
+    await wait(80);
+
+    key(instance, "c");
+    await wait(30);
+    expect(instance.lastFrame() ?? "").toContain("category scope");
+
+    key(instance, "\u001B[B");
+    await wait(30);
+    key(instance, "\r");
+    await wait(30);
+    expect(instance.lastFrame() ?? "").toContain("cat MOVIE");
+  });
+
+  it("shows a recovery banner when a previous run was recovered", async () => {
+    const app = makeApp();
+    const manager = app.manager as unknown as FakeManager;
+    manager.recovery = {
+      database: true,
+      downloadState: true,
+      torrentMetadata: true,
+      existingPieces: true,
+      resumed: ["Big File (40%)"],
+      completed: [],
+      recoveredQueued: 0,
+      failed: [],
+      notes: [],
+    };
+    const instance = render(<TornedoApp app={app} />);
+    await wait(30);
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("recovered from previous run");
+    expect(frame).toContain("1 resumed");
+    expect(frame).toContain("0 verified complete");
   });
 });

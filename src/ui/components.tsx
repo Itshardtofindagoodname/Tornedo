@@ -150,3 +150,97 @@ export function ProgressBar({ progress, width, color = palette.cyan }: { progres
     </Text>
   );
 }
+
+/** Animated determinate progress: pulses the head cell while `active`. */
+export function AnimatedProgress({ progress, width, active, tick, color = palette.cyan }: { progress: number; width: number; active: boolean; tick: number; color?: string }): ReactNode {
+  const p = Math.max(0, Math.min(1, progress));
+  const filled = Math.min(width, Math.floor(p * width));
+  const rest = width - filled;
+  const parts: ReactNode[] = [];
+  if (filled > 0) parts.push(<Text key="done" color={color}>{"█".repeat(filled)}</Text>);
+  if (rest > 0) {
+    if (active && tick % 2 === 0) {
+      parts.push(<Text key="head" backgroundColor={color} color={palette.bg}>{" "}</Text>);
+      parts.push(<Text key="rest" color={palette.faint}>{"░".repeat(rest - 1)}</Text>);
+    } else {
+      parts.push(<Text key="rest" color={palette.faint}>{"░".repeat(rest)}</Text>);
+    }
+  }
+  return <Text>{parts}</Text>;
+}
+
+/** Indeterminate activity meter for speed/throughput. */
+export function ActivityMeter({ rate, tick }: { rate: number; tick: number }): ReactNode {
+  const full = Math.max(0, Math.min(12, Math.round((tick % 12) + rate * 8)));
+  return (
+    <Text color={palette.cyan}>
+      {"▁▂▃▄▅▆▇█"[full % 8]}
+      <Text color={palette.faint}>{"▁▂▃▄▅▆▇█".slice(0, 1)}</Text>
+    </Text>
+  );
+}
+
+// --- select / confirm ------------------------------------------------------
+
+export interface SelectOption<T extends string> {
+  value: T;
+  label: string;
+  hint?: string;
+}
+
+/** Vertical list selector. `selected` is the highlighted row index; App owns keys. */
+export function SelectList<T extends string>({
+  title,
+  options,
+  selected,
+  width = 60,
+  hint,
+}: {
+  title: string;
+  options: readonly SelectOption<T>[];
+  selected: number;
+  width?: number;
+  hint?: string;
+}): ReactNode {
+  return (
+    <Modal title={title}>
+      <Box flexDirection="column" width={width - 6}>
+        {options.map((opt, i) => (
+          <Box key={opt.value} backgroundColor={i === selected ? palette.accent : undefined}>
+            <Text color={i === selected ? palette.bg : palette.subtext}>
+              {i === selected ? "»" : " "} {opt.label}
+            </Text>
+            {opt.hint ? <Text color={i === selected ? palette.bg : palette.faint}> — {opt.hint}</Text> : null}
+          </Box>
+        ))}
+        {hint ? (
+          <Box marginTop={1}>
+            <Text color={palette.faint}>{hint}</Text>
+          </Box>
+        ) : null}
+      </Box>
+    </Modal>
+  );
+}
+
+/** Confirmation dialog. `yes` toggles the highlighted answer; App commits on confirm. */
+export function Confirm({ prompt, yes, width = 60 }: { prompt: string; yes: boolean; width?: number }): ReactNode {
+  return (
+    <Modal title="confirm">
+      <Box flexDirection="column" width={width - 6}>
+        <Text color={palette.subtext}>{prompt}</Text>
+        <Box marginTop={1}>
+          <Box marginRight={2} backgroundColor={yes ? palette.accent : undefined}>
+            <Text color={yes ? palette.bg : palette.subtext}> yes </Text>
+          </Box>
+          <Box backgroundColor={!yes ? palette.accent : undefined}>
+            <Text color={!yes ? palette.bg : palette.subtext}> no </Text>
+          </Box>
+        </Box>
+        <Box marginTop={1}>
+          <Text color={palette.faint}>enter confirm · tab/←→ toggle · esc cancel</Text>
+        </Box>
+      </Box>
+    </Modal>
+  );
+}

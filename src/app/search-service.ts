@@ -3,10 +3,11 @@
  * settle, raw results are appended and the results pipeline (normalize, dedupe,
  * rank, group) rebuilds incrementally. Consumers subscribe to changes.
  */
-import type { MediaCategory, Release, ReleaseGroup, SearchResult } from "../model/search.js";
-import type { SearchEmitter, SearchSummary, SourceFailure } from "../model/source.js";
+import type { InferredQuery, MediaCategory, Release, ReleaseGroup, SearchResult } from "../model/search.js";
+import type { SearchEmitter, SearchSummary, SourceAdapter, SourceFailure } from "../model/source.js";
 import type { RankingConfig } from "../config/config.js";
 import type { SearchEngine } from "../search/engine.js";
+import { analyzeQuery } from "../media/query.js";
 import { buildGroups, buildReleases, type PipelineOptions } from "../results/pipeline.js";
 import { CancelledError } from "../sources/net.js";
 
@@ -14,6 +15,8 @@ export interface SearchServiceOptions {
   engine: SearchEngine;
   healthSources: ReadonlySet<string>;
   getRank(): RankingConfig;
+  /** Current source adapters (for source preference on inferred media types). */
+  getSources?(): readonly SourceAdapter[];
 }
 
 export interface SearchFailure {
@@ -36,6 +39,8 @@ export class SearchSession {
   readonly query: string;
   readonly sourceIds?: string[];
   readonly category?: MediaCategory;
+  /** What Tornedo inferred the user meant (see src/media/query.ts). */
+  readonly inferred: InferredQuery;
 
   private rawResults: SearchResult[] = [];
   private releaseList: Release[] = [];
@@ -55,6 +60,7 @@ export class SearchSession {
     this.query = query;
     this.sourceIds = sourceIds;
     this.category = category;
+    this.inferred = analyzeQuery(query);
   }
 
   start(): void {
@@ -117,12 +123,27 @@ export class SearchSession {
   }
 
   private rebuild(): void {
+    const preferredSources = this.preferredSourceIds();
     const opts: PipelineOptions = {
       healthSources: this.service.healthSources,
       rank: this.service.getRank(),
+      inferred: this.inferred,
+      preferredSources,
     };
     this.releaseList = buildReleases(this.rawResults, opts);
     this.groupList = buildGroups(this.releaseList, opts);
+  }
+
+  /** Source ids whose categories match the inferred media type. */
+  private preferredSourceIds(): ReadonlySet<string> | undefined {
+    const mediaType = this.inferred.mediaType;
+    if (!mediaType) return undefined;
+    const sources = this.service.getSources?.() ?? [];
+    const ids = new Set<string>();
+    for (const s of sources) {
+      if (s.categories.includes(mediaType)) ids.add(s.id);
+    }
+    return ids.size > 0 ? ids : undefined;
   }
 
   private emit(): void {
@@ -130,6 +151,11 @@ export class SearchSession {
   }
 
   // --- reads ----------------------------------------------------------------
+
+  /** What Tornedo inferred about the query (see src/media/query.ts). */
+  inference(): InferredQuery {
+    return this.inferred;
+  }
 
   releases(): Release[] {
     return this.releaseList;

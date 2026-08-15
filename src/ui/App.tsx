@@ -8,12 +8,29 @@ import { Box, Text, useApp, useInput, useWindowSize, type Key } from "ink";
 import type { Application } from "../app/application.js";
 import type { SearchSession } from "../app/search-service.js";
 import type { KeyAction } from "../config/config.js";
+import { MEDIA_CATEGORIES, type MediaCategory } from "../model/search.js";
 import type { TorrentItem } from "../model/torrent.js";
+import {
+  parseFilterText,
+  SORT_OPTIONS,
+  type ReleaseFilter,
+  type SortOption,
+} from "../results/filter.js";
 import { truncate } from "../utils/duration.js";
-import { Footer, Header, Modal, TextInput, Toast, type HintItem } from "./components.js";
+import {
+  Confirm,
+  Footer,
+  Header,
+  Modal,
+  SelectList,
+  TextInput,
+  Toast,
+  type HintItem,
+  type SelectOption,
+} from "./components.js";
 import { DownloadsView } from "./DownloadsView.js";
 import { HelpView } from "./HelpView.js";
-import { useManagerEvents, useRerenderInterval, useSearchSession } from "./hooks.js";
+import { useManagerEvents, useRecovery, useRerenderInterval, useSearchSession } from "./hooks.js";
 import { firstKey, matchKey } from "./keys.js";
 import { filteredReleases, ResultsView } from "./ResultsView.js";
 import { SearchHome } from "./SearchHome.js";
@@ -22,10 +39,10 @@ import { applyTyping } from "./text.js";
 
 type View = "home" | "results" | "downloads" | "help";
 
-interface PromptState {
-  title: string;
-  onSubmit: (value: string) => void;
-}
+type Overlay =
+  | { kind: "prompt"; title: string; hint?: string; onSubmit: (value: string) => void }
+  | { kind: "select"; title: string; options: SelectOption<string>[]; hint?: string; onPick: (value: string) => void }
+  | { kind: "confirm"; prompt: string; onConfirm: () => void };
 
 export interface TornedoAppProps {
   app: Application;
@@ -46,9 +63,20 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   const [details, setDetails] = useState(false);
   const [filter, setFilter] = useState("");
   const [session, setSession] = useState<SearchSession | null>(null);
-  const [prompt, setPrompt] = useState<PromptState | null>(null);
+
+  // --- refinement state -----------------------------------------------------
+  const [sortOption, setSortOption] = useState<SortOption>(SORT_OPTIONS[0]!);
+  const [categoryScope, setCategoryScope] = useState<MediaCategory | null>(null);
+  const [releaseFilter, setReleaseFilter] = useState<ReleaseFilter>({});
+  const [filterText, setFilterText] = useState("");
+
+  // --- overlay state ---------------------------------------------------------
+  const [overlay, setOverlay] = useState<Overlay | null>(null);
   const [promptValue, setPromptValue] = useState("");
   const [promptCursor, setPromptCursor] = useState(0);
+  const [overlaySelect, setOverlaySelect] = useState(0);
+  const [overlayYes, setOverlayYes] = useState(false);
+
   const [message, setMessage] = useState<string | null>(null);
 
   const prevView = useRef<View>("home");
@@ -57,13 +85,10 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   const tick = useRerenderInterval(250);
   useSearchSession(session);
   useManagerEvents(app);
-
-  useEffect(() => {
-    showMessage("Queued: Dune");
-  }, []);
+  const recovery = useRecovery(app);
 
   // Cancel any running search when the app tears down (or a newer one starts).
-useEffect(() => {
+  useEffect(() => {
     if (!session) return;
     return () => session.cancel();
   }, [session]);
@@ -93,53 +118,125 @@ useEffect(() => {
     s.start();
     setSelected(0);
     setFilter("");
+    setCategoryScope(null);
+    setReleaseFilter({});
+    setFilterText("");
+    setSortOption(SORT_OPTIONS[0]!);
     setDetails(false);
     setView("results");
   };
 
-  const openPrompt = (title: string, initial: string, onSubmit: (value: string) => void): void => {
-    setPrompt({ title, onSubmit });
+  // --- overlays ---------------------------------------------------------------
+
+  const openPrompt = (title: string, initial: string, onSubmit: (value: string) => void, hint?: string): void => {
+    setOverlay({ kind: "prompt", title, hint, onSubmit });
     setPromptValue(initial);
     setPromptCursor(initial.length);
   };
 
-  const closePrompt = (): void => {
-    setPrompt(null);
+  const openSelect = (title: string, options: SelectOption<string>[], onPick: (value: string) => void, selected = 0, hint?: string): void => {
+    setOverlay({ kind: "select", title, options, hint, onPick });
+    setOverlaySelect(selected);
+  };
+
+  const openConfirm = (promptText: string, onConfirm: () => void): void => {
+    setOverlay({ kind: "confirm", prompt: promptText, onConfirm });
+    setOverlayYes(false);
+  };
+
+  const closeOverlay = (): void => {
+    setOverlay(null);
     setPromptValue("");
     setPromptCursor(0);
+    setOverlaySelect(0);
+    setOverlayYes(false);
   };
 
-  const confirmPrompt = (): void => {
-    const p = prompt;
-    const value = promptValue;
-    closePrompt();
-    if (p) p.onSubmit(value);
+  const confirmOverlay = (): void => {
+    const o = overlay;
+    if (!o) return;
+    if (o.kind === "prompt") {
+      const value = promptValue;
+      closeOverlay();
+      o.onSubmit(value);
+    } else if (o.kind === "select") {
+      const opt = o.options[overlaySelect];
+      closeOverlay();
+      if (opt) o.onPick(opt.value);
+    } else {
+      const yes = overlayYes;
+      closeOverlay();
+      if (yes) o.onConfirm();
+    }
   };
 
-  const handlePromptKey = (input: string, key: Key): void => {
+  const handleOverlayKey = (input: string, key: Key): void => {
+    const o = overlay;
+    if (!o) return;
+    if (o.kind === "prompt") {
+      if (key.return) {
+        confirmOverlay();
+        return;
+      }
+      if (key.escape) {
+        closeOverlay();
+        return;
+      }
+      const next = applyTyping(promptValue, promptCursor, input, key);
+      setPromptValue(next.value);
+      setPromptCursor(next.cursor);
+      return;
+    }
+    if (o.kind === "select") {
+      if (key.upArrow) {
+        setOverlaySelect((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setOverlaySelect((i) => Math.min(o.options.length - 1, i + 1));
+        return;
+      }
+      if (key.return) {
+        confirmOverlay();
+        return;
+      }
+      if (key.escape) {
+        closeOverlay();
+        return;
+      }
+      return;
+    }
+    // confirm dialog
     if (key.return) {
-      confirmPrompt();
+      confirmOverlay();
       return;
     }
     if (key.escape) {
-      closePrompt();
+      closeOverlay();
       return;
     }
-    const next = applyTyping(promptValue, promptCursor, input, key);
-    setPromptValue(next.value);
-    setPromptCursor(next.cursor);
+    if (key.tab || key.leftArrow || key.rightArrow || input === " ") {
+      setOverlayYes((y) => !y);
+      return;
+    }
+    if (input.toLowerCase() === "y") {
+      setOverlayYes(true);
+      return;
+    }
+    if (input.toLowerCase() === "n") {
+      setOverlayYes(false);
+    }
   };
 
   // --- downloads --------------------------------------------------------------
 
+  const currentReleases = (): ReturnType<typeof filteredReleases> => filteredReleases(session, filter, releaseFilter, categoryScope);
+
   const downloadSelected = (destination?: string): void => {
-    const rels = filteredReleases(session, filter);
+    const rels = currentReleases();
     const idx = Math.min(selected, Math.max(0, rels.length - 1));
     const r = rels[idx];
     if (!r) return;
-    // Some providers (Internet Archive) expose direct-download items, not
-    // BitTorrent magnets. The engine is torrent-only, so refuse loudly instead
-    // of queueing something that can never resolve.
     if (r.magnet && !/^magnet:/i.test(r.magnet)) {
       showMessage(`Direct-download source (${r.category}); the torrent engine cannot fetch "${truncate(r.magnet, 30)}"`);
       return;
@@ -171,10 +268,118 @@ useEffect(() => {
     showMessage(`Removed: ${truncate(item.name, 50)}`);
   };
 
+  const cancelSelected = (): void => {
+    const item = currentDownload();
+    if (!item) return;
+    app.manager.cancel(item.id);
+    showMessage(`Cancelled: ${truncate(item.name, 50)}`);
+  };
+
+  const deleteFilesSelected = async (): Promise<void> => {
+    const item = currentDownload();
+    if (!item) return;
+    await app.manager.deleteFiles(item.id);
+    showMessage(`Deleted files: ${truncate(item.name, 50)}`);
+  };
+
+  const openLocationSelected = (): void => {
+    const item = currentDownload();
+    if (!item) return;
+    if (app.manager.openLocation(item.id)) {
+      showMessage(`Opening: ${truncate(item.destination ?? item.name, 60)}`);
+    } else {
+      showMessage(`Location: ${item.destination ?? "unknown"}`);
+    }
+  };
+
+  const openActionMenu = (): void => {
+    const item = currentDownload();
+    if (!item) return;
+    const opts: SelectOption<string>[] = [];
+    const cancellable = ["queued", "downloading", "stalled", "starting", "waiting_metadata", "checking", "ready", "paused", "stopped", "error"].includes(item.status);
+    const resumable = ["paused", "stopped"].includes(item.status) || item.status === "error";
+    const pausable = ["downloading", "stalled", "starting", "waiting_metadata", "checking", "ready", "queued"].includes(item.status) || item.status === "seeding";
+    if (resumable) opts.push({ value: "resume", label: "Resume", hint: `status ${item.status}` });
+    if (pausable) opts.push({ value: "pause", label: "Pause", hint: `status ${item.status}` });
+    if (item.status === "completed") opts.push({ value: "toggleSeed", label: item.seedEnabled ? "Stop seeding" : "Start seeding" });
+    if (cancellable) opts.push({ value: "cancel", label: "Cancel download", hint: "keep files, stop transfer" });
+    if (item.destination) opts.push({ value: "open", label: "Open location", hint: item.destination });
+    opts.push({ value: "delete", label: "Remove + delete files", hint: "dangerous — deletes on disk" });
+    opts.push({ value: "remove", label: "Remove from list", hint: "keeps files on disk" });
+    openSelect("download actions", opts, (v) => {
+      switch (v) {
+        case "pause":
+          app.manager.pause(item.id);
+          break;
+        case "resume":
+          app.manager.resume(item.id);
+          break;
+        case "toggleSeed":
+          app.manager.toggleSeeding(item.id);
+          break;
+        case "cancel":
+          openConfirm(`Cancel "${truncate(item.name, 50)}"? Files stay on disk.`, cancelSelected);
+          break;
+        case "open":
+          openLocationSelected();
+          break;
+        case "delete":
+          openConfirm(`Delete files for "${truncate(item.name, 50)}" and remove it from the list?`, () => void deleteFilesSelected());
+          break;
+        case "remove":
+          openConfirm(`Remove "${truncate(item.name, 50)}" from the list? Files stay on disk.`, () => void removeSelected());
+          break;
+        default:
+          break;
+      }
+    });
+  };
+
+  // --- refinement handlers ------------------------------------------------------
+
+  const openCategorySelector = (): void => {
+    const all: SelectOption<string>[] = [
+      { value: "", label: "All categories", hint: "clear scope" },
+      ...MEDIA_CATEGORIES.map((c) => ({ value: c, label: c })),
+    ];
+    const cur = all.findIndex((o) => o.value === categoryScope) ?? 0;
+    openSelect("category scope", all, (v) => {
+      setCategoryScope((v === "" ? null : v) as MediaCategory | null);
+      setSelected(0);
+    }, Math.max(0, cur), "↑/↓ move · enter pick · esc close");
+  };
+
+  const openSortSelector = (): void => {
+    const opts: SelectOption<string>[] = SORT_OPTIONS.map((o) => ({ value: o.id, label: o.label }));
+    const cur = SORT_OPTIONS.findIndex((o) => o.id === sortOption.id);
+    openSelect("sort results", opts, (id) => {
+      const found = SORT_OPTIONS.find((o) => o.id === id);
+      if (found) setSortOption(found);
+      setSelected(0);
+    }, Math.max(0, cur), "↑/↓ move · enter pick · esc close");
+  };
+
+  const openFilterEditor = (): void => {
+    openPrompt(
+      "filter results",
+      filterText,
+      (text) => {
+        const trimmed = text.trim();
+        const parsed = parseFilterText(trimmed);
+        const structured = Object.values(parsed).some((v) => v !== undefined);
+        setReleaseFilter(parsed);
+        setFilterText(trimmed);
+        setFilter(structured ? "" : trimmed);
+        setSelected(0);
+      },
+      "min:<seeds> max:<size> src:<id> res:<res> codec:<codec> audio:<audio> lang:<lang>",
+    );
+  };
+
   // --- key dispatch ------------------------------------------------------------
 
   const handleResultsKey = (action: KeyAction | null): void => {
-    const rels = filteredReleases(session, filter);
+    const rels = currentReleases();
     const last = Math.max(0, rels.length - 1);
     switch (action) {
       case "up":
@@ -208,10 +413,13 @@ useEffect(() => {
         setDetails((d) => !d);
         break;
       case "filter":
-        openPrompt("filter results", filter, (v) => {
-          setFilter(v.trim());
-          setSelected(0);
-        });
+        openFilterEditor();
+        break;
+      case "category":
+        openCategorySelector();
+        break;
+      case "sort":
+        openSortSelector();
         break;
       case "search":
         setView("home");
@@ -276,8 +484,11 @@ useEffect(() => {
       case "toggleDetails":
         setDownloadDiagnostics((v) => !v);
         break;
+      case "menu":
+        openActionMenu();
+        break;
       case "remove":
-        void removeSelected();
+        openConfirm(`Remove "${truncate(currentDownload()?.name ?? "", 50)}" from the list? Files stay on disk.`, () => void removeSelected());
         break;
       case "back":
       case "downloads":
@@ -292,8 +503,8 @@ useEffect(() => {
   };
 
   useInput((input, key) => {
-    if (prompt) {
-      handlePromptKey(input, key);
+    if (overlay) {
+      handleOverlayKey(input, key);
       return;
     }
     const action = matchKey(app.getConfig().keybindings, input, key);
@@ -308,7 +519,6 @@ useEffect(() => {
         } else if (action === "back") {
           exit();
         } else {
-          // Typing in the search box; bound actions like `v` take priority.
           const next = applyTyping(query, cursor, input, key);
           setQuery(next.value);
           setCursor(next.cursor);
@@ -348,7 +558,8 @@ useEffect(() => {
         { keys: fk("confirm", "enter"), label: "download" },
         { keys: fk("downloadTo", "D"), label: "download to" },
         { keys: fk("filter", "ctrl+f"), label: "filter" },
-        { keys: fk("search", "/"), label: "search" },
+        { keys: fk("category", "c"), label: "category" },
+        { keys: fk("sort", "o"), label: "sort" },
         { keys: fk("downloads", "v"), label: "downloads" },
         { keys: fk("help", "?"), label: "help" },
         { keys: fk("quit", "q"), label: "quit" },
@@ -358,7 +569,7 @@ useEffect(() => {
       hints = [
         { keys: fk("pause", "p"), label: "pause" },
         { keys: fk("resume", "r"), label: "resume" },
-        { keys: fk("remove", "x"), label: "remove" },
+        { keys: fk("menu", "m"), label: "actions" },
         { keys: fk("toggleSeed", "s"), label: "seed" },
         { keys: fk("toggleDetails", "i"), label: "diagnostics" },
         { keys: fk("back", "esc"), label: "back" },
@@ -401,21 +612,58 @@ useEffect(() => {
             selected={selected}
             details={details}
             filter={filter}
+            sortSpec={sortOption.spec}
+            categoryScope={categoryScope}
+            releaseFilter={releaseFilter}
             tick={tick}
           />
         ) : null}
-        {view === "downloads" ? <DownloadsView app={app} selected={selectedDownload} diagnostics={downloadDiagnostics} /> : null}
+        {view === "downloads" ? <DownloadsView app={app} selected={selectedDownload} diagnostics={downloadDiagnostics} tick={tick} /> : null}
         {view === "help" ? <HelpView app={app} /> : null}
       </Box>
       {message ? <Toast>{message}</Toast> : null}
+      {recovery ? (
+        <RecoveryBanner
+          resumed={recovery.resumed.length}
+          completed={recovery.completed.length}
+          failed={recovery.failed.length}
+        />
+      ) : null}
       <Footer hints={hints} />
-      {prompt ? (        <Modal title={prompt.title}>
+
+      {overlay?.kind === "prompt" ? (
+        <Modal title={overlay.title}>
           <TextInput value={promptValue} cursor={promptCursor} />
-          <Box marginTop={1}>
-            <Text dimColor>enter confirm · esc cancel</Text>
+          <Box marginTop={1} width={58}>
+            <Text dimColor wrap="truncate">{overlay.hint ?? "enter confirm · esc cancel"}</Text>
           </Box>
         </Modal>
       ) : null}
+      {overlay?.kind === "select" ? (
+        <SelectList
+          title={overlay.title}
+          options={overlay.options}
+          selected={overlaySelect}
+          hint={overlay.hint}
+        />
+      ) : null}
+      {overlay?.kind === "confirm" ? (
+        <Confirm prompt={overlay.prompt} yes={overlayYes} />
+      ) : null}
+    </Box>
+  );
+}
+
+function RecoveryBanner({ resumed, completed, failed }: { resumed: number; completed: number; failed: number }): React.ReactNode {
+  return (
+    <Box width="100%" height={1} backgroundColor={palette.yellow} paddingLeft={1} alignItems="center">
+      <Text color={palette.bg} bold>
+        ⚠ recovered from previous run
+      </Text>
+      <Text color={palette.bg}>
+        {"  ·  "}{resumed} resumed · {completed} verified complete
+        {failed > 0 ? <Text color={palette.bg} bold> · {failed} failed</Text> : null}
+      </Text>
     </Box>
   );
 }

@@ -4,6 +4,7 @@
  */
 import type { NormalizedResult, ReleaseMetadata, SearchResult } from "../model/search.js";
 import { classifyMedia } from "./classify.js";
+import { toMediaEntity } from "./entity.js";
 import { parseTitle } from "./title.js";
 
 export function normalizeResult(result: SearchResult): NormalizedResult {
@@ -15,6 +16,7 @@ export function normalizeResult(result: SearchResult): NormalizedResult {
     year: parsed.year,
     season: parsed.season,
     episode: parsed.episode,
+    episodeRange: parsed.episodeRange,
     quality: parsed.quality,
     resolution: parsed.resolution,
     codec: parsed.codec,
@@ -30,7 +32,15 @@ export function normalizeResult(result: SearchResult): NormalizedResult {
   };
 
   if (category === "Music") {
-    applyMusicMetadata(metadata, parsed.title);
+    applyMusicMetadata(metadata, result.title);
+  }
+  if (parsed.platform || parsed.version) {
+    metadata.game = {
+      platform: parsed.platform,
+      version: parsed.version,
+      edition:
+        category === "Game" && parsed.edition.length > 0 ? parsed.edition.join(", ") : undefined,
+    };
   }
 
   return {
@@ -43,6 +53,13 @@ export function normalizeResult(result: SearchResult): NormalizedResult {
     leechers: result.leechers,
     files: result.files,
     metadata,
+    entity: toMediaEntity({
+      title: parsed.title || result.title,
+      category,
+      size: result.size,
+      seeders: result.seeders,
+      metadata,
+    }),
     magnet: result.magnet,
     torrentUrls: result.torrentUrl ? [result.torrentUrl] : [],
     sources: [result.sourceId],
@@ -51,7 +68,10 @@ export function normalizeResult(result: SearchResult): NormalizedResult {
   };
 }
 
-function applyMusicMetadata(metadata: ReleaseMetadata, title: string): void {
+function applyMusicMetadata(metadata: ReleaseMetadata, rawTitle: string): void {
+  // parseTitle normalizes dashes away from the cleaned title, so split on the
+  // raw source title (dots already read as spaces here) to keep artist/album.
+  const title = rawTitle.replace(/[._~,|]/g, " ").replace(/\s+/g, " ").trim();
   const split = title.split(/\s+[-–]\s+/);
   if (split.length >= 2) {
     metadata.artist = split[0]!.trim();

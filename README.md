@@ -17,18 +17,32 @@ tornedo                        # terminal UI
 
 - **Federated search** — every enabled source runs concurrently with its own
   timeout and fault isolation; a slow or dead source never blocks the others.
-  Results stream in as each source settles.
+  Results stream in as each source settles. Transient failures (timeouts,
+  outages, 5xx) are retried once with a short backoff; parse failures never are.
 - **Smart results** — titles are parsed into structured metadata (quality,
-  codec, audio, HDR, editions, languages…), identical torrents from different
-  sites are merged, everything is deterministically ranked, and releases group
-  by title/year/season with each quality as a variant.
+  codec, audio, HDR, editions, languages, season/episode ranges, game platform
+  and version…), identical torrents from different sites are merged, everything
+  is deterministically ranked, and releases group by title/year/season with each
+  quality as a variant.
+- **Intelligent search** — every query is analyzed (media type, title,
+  artist/album, year, quality, season/episode) without ever over-asserting: a
+  confident parse boosts matching releases and prefers the sources that carry
+  that media type; an ambiguous query degrades to a plain search.
 - **Fast downloads** — WebTorrent engine behind a thin abstraction, persistent
   queue, resume support, per-torrent and global speed limits, seeding.
+- **Crash recovery** — a run marker in the SQLite database tells startup whether
+  the previous run ended cleanly. If it crashed, interrupted downloads are
+  reconciled (progress preserved, pieces re-verified) and the UI shows exactly
+  what was resumed, completed and failed.
 - **Terminal UI** — an elegant, component-driven TUI built on **Ink + React**:
-  search, results, live source status, details, downloads, and help. Every
-  keybinding is configurable and shown on-screen.
+  search, results with category/sort/filter controls, live source status,
+  details, downloads with a full action menu, and help. Every keybinding is
+  configurable and shown on-screen.
 - **Headless** — everything the UI can do is available as commands with
   `--json` output.
+- **Self-diagnostics** — `tornedo doctor` inspects the config, database,
+  download directory, disk space, engine, network, DHT, trackers and sources,
+  and reports each check with an actionable fix.
 - **Watch mode** — drop `.torrent` or `.magnet`/magnet-URI files into a folder
   and they are added automatically.
 - **Private by design** — no accounts, no tracking, no analytics. Config and
@@ -59,6 +73,9 @@ tornedo watch <dir>        Watch a directory for .torrent / magnet files
 tornedo config             Show / set configuration
 tornedo sources            List sources and their enabled state
 tornedo sources --check    Diagnose Torznab / Internet Archive providers
+tornedo doctor             Run self-diagnostics (config, DB, disk, network…)
+tornedo doctor --check     Include live endpoint capability probes
+tornedo doctor --json      Machine-readable report
 tornedo tui                Terminal UI (default when no command)
 ```
 
@@ -72,13 +89,17 @@ Common flags: `--json` (machine-readable output on stdout only), `--source <id>`
 | --- | --- |
 | `↑/k` `↓/j` | navigate |
 | `enter` / `d` | download selected |
-| `D` | download to a chosen directory |
+| `D` | download to a chosen directory (then `p`/`r`/`x`/`s`/`l`/`o` manage it) |
+| `c` | category scope for the current results |
+| `o` | sort order for the current results |
+| `ctrl+f` | refine the results with a filter (min/max size, source, resolution, codec, audio, language, quality) |
 | `i` | toggle details pane |
 | `/` | search again |
 | `v` | downloads view |
 | `p` / `r` | pause / resume selected download |
 | `x` | remove selected download |
 | `s` | toggle seeding |
+| `m` | action menu for the selected download (cancel, delete files, open folder…) |
 | `y` | show selected magnet |
 | `?` | help |
 | `q` | quit |
@@ -128,6 +149,8 @@ Set `TORNEDO_STATE_DIR` to relocate both (also used by the test suite).
 | `sourceTimeoutMs` | per-source search timeout |
 | `sources` | `sourceId -> enabled` map |
 | `seedAfterComplete` | default seeding behavior |
+| `diskSpaceWarningMb` | minimum free space (MiB) flagged by `tornedo doctor` |
+| `recoveryAutoResume` | resume interrupted downloads automatically after a crash |
 | `ranking.*` | ranking weights (seeders, quality, health, size) |
 | `keybindings.*` | action -> key names (see `tornedo help`) |
 | `watchIntervalMs` | watch-mode poll interval |
@@ -206,11 +229,12 @@ src/
   config/      config schema + OS paths
   database/    SQLite schema, migrations, store
   torrent/     TorrentClient abstraction, WebTorrent engine, parsing
-  downloads/   download manager (queue, scheduler, seeding)
+  downloads/   download manager (queue, scheduler, seeding, crash recovery)
   sources/     source adapters + shared net/rss helpers
-  search/      federated search engine (fault-isolated, concurrent)
-  media/       title/audio parsing, classification, normalization
-  results/     dedupe, ranking, grouping, filtering
+  search/      federated search engine (fault-isolated, concurrent, retrying)
+  media/       query analysis, title/audio parsing, classification, entity building
+  results/     dedupe, ranking, grouping, filtering, sorting
+  diagnostics/ self-diagnostics used by `tornedo doctor`
   app/         Application wiring + session-based search service
   watch/       watch-mode service
   cli/         commands + arg parsing
