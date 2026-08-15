@@ -27,8 +27,10 @@ export function categoryTag(category: MediaCategory): string {
 
 const STATUS_COLORS: Record<TorrentStatus, string> = {
   queued: palette.dim,
+  waiting_metadata: palette.yellow,
   starting: palette.yellow,
   downloading: palette.cyan,
+  stalled: palette.dim,
   checking: palette.yellow,
   paused: palette.orange,
   completed: palette.green,
@@ -51,10 +53,13 @@ export function statusGlyph(status: TorrentStatus): string {
     case "queued":
       return "·";
     case "starting":
+    case "waiting_metadata":
     case "checking":
       return "~";
     case "paused":
       return "‖";
+    case "stalled":
+      return "⚠";
     case "completed":
       return "✓";
     case "error":

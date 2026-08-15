@@ -23,6 +23,18 @@ export class CancelledError extends Error {
   }
 }
 
+/**
+ * Thrown when a source responded (HTML/JSON/RSS arrived) but the structure no
+ * longer matches what the adapter knows how to parse. The engine classifies
+ * this as a `parse` failure, distinct from timeouts / HTTP errors / outages.
+ */
+export class ParseError extends Error {
+  constructor(message = "source structure could not be parsed") {
+    super(message);
+    this.name = "ParseError";
+  }
+}
+
 export interface FetchOptions {
   headers?: Record<string, string>;
   signal?: AbortSignal;

@@ -42,6 +42,7 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   const [cursor, setCursor] = useState(0);
   const [selected, setSelected] = useState(0);
   const [selectedDownload, setSelectedDownload] = useState(0);
+  const [downloadDiagnostics, setDownloadDiagnostics] = useState(false);
   const [details, setDetails] = useState(false);
   const [filter, setFilter] = useState("");
   const [session, setSession] = useState<SearchSession | null>(null);
@@ -264,6 +265,9 @@ useEffect(() => {
         if (item) app.manager.toggleSeeding(item.id);
         break;
       }
+      case "toggleDetails":
+        setDownloadDiagnostics((v) => !v);
+        break;
       case "remove":
         void removeSelected();
         break;
@@ -348,6 +352,7 @@ useEffect(() => {
         { keys: fk("resume", "r"), label: "resume" },
         { keys: fk("remove", "x"), label: "remove" },
         { keys: fk("toggleSeed", "s"), label: "seed" },
+        { keys: fk("toggleDetails", "i"), label: "diagnostics" },
         { keys: fk("back", "esc"), label: "back" },
         { keys: fk("help", "?"), label: "help" },
         { keys: fk("quit", "q"), label: "quit" },
@@ -391,7 +396,7 @@ useEffect(() => {
             tick={tick}
           />
         ) : null}
-        {view === "downloads" ? <DownloadsView app={app} selected={selectedDownload} /> : null}
+        {view === "downloads" ? <DownloadsView app={app} selected={selectedDownload} diagnostics={downloadDiagnostics} /> : null}
         {view === "help" ? <HelpView app={app} /> : null}
       </Box>
       {message ? <Toast>{message}</Toast> : null}

@@ -13,6 +13,7 @@ import { SearchEngine } from "../search/engine.js";
 import { SOURCES } from "../sources/registry.js";
 import type { TorrentClient } from "../torrent/client.js";
 import { WebTorrentClient } from "../torrent/webtorrent.js";
+import { PUBLIC_TRACKERS } from "../torrent/parse.js";
 import { SearchService } from "./search-service.js";
 
 export interface ApplicationOptions {
@@ -40,7 +41,7 @@ export class Application {
   private constructor(opts: ApplicationOptions) {
     this.db = opts.memoryDb ? openMemoryHandle() : openDatabase();
     this.store = new TorrentStore(this.db.db);
-    this.client = opts.client ?? new WebTorrentClient();
+    this.client = opts.client ?? new WebTorrentClient({ announce: [...PUBLIC_TRACKERS] });
     this.configState = defaultConfig();
     this.sources = SOURCES;
     this.healthSources = new Set(SOURCES.filter((s) => s.reportsHealth).map((s) => s.id));

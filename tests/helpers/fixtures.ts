@@ -174,6 +174,8 @@ export class FakeClient implements TorrentClient {
     return this.adds.has(id) ? makeTorrentStats({ progress: 1, downloaded: 100 }) : null;
   }
 
+  retryMetadata(_id: string): void {}
+
   stats(): ClientStats {
     return { downloadSpeed: 0, uploadSpeed: 0, active: this.adds.size };
   }
@@ -201,11 +203,17 @@ export class ManualClient implements TorrentClient {
   readonly kind = "manual";
   adds = new Map<string, TorrentClientAdd>();
   removed = new Set<string>();
+  retried = new Set<string>();
   private handlers = new Map<string, TorrentClientHandlers>();
+  private statsOverrides = new Map<string, TorrentStats>();
 
   add(input: TorrentClientAdd, handlers: TorrentClientHandlers): void {
     this.adds.set(input.id, input);
     this.handlers.set(input.id, handlers);
+  }
+
+  setStats(id: string, stats: Partial<TorrentStats>): void {
+    this.statsOverrides.set(id, makeTorrentStats({ ...this.get(id) ?? {}, ...stats }));
   }
 
   fireDone(id: string): void {
@@ -214,6 +222,18 @@ export class ManualClient implements TorrentClient {
 
   fireError(id: string, message: string): void {
     this.handlers.get(id)?.onError(id, message);
+  }
+
+  fireMetadata(id: string, meta: { name: string; total: number; files?: number }): void {
+    this.handlers.get(id)?.onMetadata(id, {
+      name: meta.name,
+      total: meta.total,
+      files: meta.files ?? 1,
+    });
+  }
+
+  fireDiagnostics(id: string, patch: object): void {
+    this.handlers.get(id)?.onDiagnostics?.(id, patch);
   }
 
   pause(id: string): void {
@@ -228,10 +248,16 @@ export class ManualClient implements TorrentClient {
     this.removed.add(id);
     this.adds.delete(id);
     this.handlers.delete(id);
+    this.statsOverrides.delete(id);
   }
 
   get(id: string): TorrentStats | null {
-    return this.adds.has(id) ? makeTorrentStats({ progress: 0.4, downloaded: 40, total: 100, ready: true }) : null;
+    if (!this.adds.has(id)) return null;
+    return this.statsOverrides.get(id) ?? makeTorrentStats({ progress: 0.4, downloaded: 40, total: 100, ready: true });
+  }
+
+  retryMetadata(id: string): void {
+    this.retried.add(id);
   }
 
   stats(): ClientStats {
@@ -247,6 +273,7 @@ export class ManualClient implements TorrentClient {
   destroy(): void {
     this.adds.clear();
     this.handlers.clear();
+    this.statsOverrides.clear();
   }
 }
 

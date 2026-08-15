@@ -13,7 +13,7 @@ import type {
   SourceFailure,
 } from "../model/source.js";
 import type { SearchResult } from "../model/search.js";
-import { CancelledError } from "../sources/net.js";
+import { CancelledError, ParseError } from "../sources/net.js";
 
 export interface SearchEngineOptions {
   sources: readonly SourceAdapter[];
@@ -89,6 +89,9 @@ export class SearchEngine {
           }
           if (err instanceof CancelledError) {
             return { sourceId: source.id, failure: { kind: "cancelled", message: err.message } };
+          }
+          if (err instanceof ParseError) {
+            return { sourceId: source.id, failure: { kind: "parse", message: err.message } };
           }
           const status = (err as { status?: number })?.status;
           const kind = typeof status === "number" && status >= 400 ? "http" : "unavailable";

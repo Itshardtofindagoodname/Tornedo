@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../src/config/config.js";
 import { openInMemory } from "../src/database/db.js";
 import { TorrentStore } from "../src/database/store.js";
@@ -30,7 +30,7 @@ describe("TorrentManager", () => {
     const { manager } = makeManager(client, { seedAfterComplete: true });
     await manager.init();
     const item = manager.add({ infohash: HASH_A, magnet: `magnet:?xt=urn:btih:${HASH_A}`, name: "A" });
-    expect(item.status).toBe("starting");
+    expect(item.status).toBe("waiting_metadata");
     await flush();
     expect(manager.get(HASH_A)!.status).toBe("seeding");
     await manager.suspend();
@@ -70,7 +70,7 @@ describe("TorrentManager", () => {
     await manager.init();
     manager.add({ infohash: HASH_A, magnet: `magnet:?xt=urn:btih:${HASH_A}`, name: "A" });
     await flush();
-    expect(manager.get(HASH_A)!.status).toBe("starting");
+    expect(manager.get(HASH_A)!.status).toBe("waiting_metadata");
 
     const statuses: string[] = [];
     manager.on("statusChanged", (_it, _f, to) => statuses.push(to));
@@ -80,7 +80,7 @@ describe("TorrentManager", () => {
 
     manager.resume(HASH_A);
     // Resume requeues and the scheduler immediately restarts it.
-    expect(manager.get(HASH_A)!.status).toBe("starting");
+    expect(manager.get(HASH_A)!.status).toBe("waiting_metadata");
 
     client.fireDone(HASH_A);
     await flush();
@@ -110,6 +110,7 @@ describe("TorrentManager", () => {
       resume: () => {},
       remove: () => {},
       get: () => null,
+      retryMetadata: () => {},
       stats: () => ({ downloadSpeed: 0, uploadSpeed: 0, active: 0 }),
       setSpeedLimits: () => {},
       listenPort: () => null,
@@ -151,5 +152,128 @@ describe("TorrentManager", () => {
     expect(item).not.toBeNull();
     expect(item!.name).toBe("Persisted");
     await revived.suspend();
+  });
+
+  describe("metadata timeout and retry", () => {
+    it("injects the fallback public-tracker list into every add", async () => {
+      const client = new ManualClient();
+      const { manager } = makeManager(client);
+      await manager.init();
+      manager.add({ infohash: HASH_A, magnet: `magnet:?xt=urn:btih:${HASH_A}`, name: "A" });
+      const added = client.adds.get(HASH_A)!;
+      expect(added.announce).toBeDefined();
+      expect(added.announce!.length).toBeGreaterThan(0);
+      await manager.suspend();
+    });
+
+    it("marks metadata timed out and schedules a bounded-backoff retry", async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new ManualClient();
+        const { manager } = makeManager(client, { seedAfterComplete: false });
+        await manager.init();
+        manager.add({ infohash: HASH_A, magnet: `magnet:?xt=urn:btih:${HASH_A}`, name: "A" });
+        // Metadata never arrives; keep the engine stats non-ready so the item
+        // stays in waiting_metadata.
+        client.setStats(HASH_A, { ready: false, total: 0, progress: 0, peers: 0, downloadSpeed: 0 });
+
+        await vi.advanceTimersByTimeAsync(61_000);
+        const item = manager.get(HASH_A)!;
+        expect(item.diagnostics!.metadata).toBe("timeout");
+        expect(item.diagnostics!.metadataRetries).toBe(1);
+        expect(client.retried.has(HASH_A)).toBe(true);
+        expect(item.diagnostics!.nextRetry).toBeGreaterThan(Date.now());
+
+        // Second window: attempt 1 → nextRetry is ~120s away.
+        await vi.advanceTimersByTimeAsync(121_000);
+        expect(manager.get(HASH_A)!.diagnostics!.metadataRetries).toBe(2);
+        expect(client.retried.has(HASH_A)).toBe(true);
+        await manager.suspend();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("never fails the item on metadata timeout (recoverable state)", async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new ManualClient();
+        const { manager } = makeManager(client, { seedAfterComplete: false });
+        await manager.init();
+        manager.add({ infohash: HASH_A, magnet: `magnet:?xt=urn:btih:${HASH_A}`, name: "A" });
+        client.setStats(HASH_A, { ready: false, total: 0, progress: 0, peers: 0, downloadSpeed: 0 });
+        await vi.advanceTimersByTimeAsync(200_000);
+        const item = manager.get(HASH_A)!;
+        expect(item.status).toBe("waiting_metadata");
+        expect(item.error).toBeNull();
+        await manager.suspend();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("transitions to downloading with size populated once metadata arrives", async () => {
+      const client = new ManualClient();
+      const { manager } = makeManager(client, { seedAfterComplete: false });
+      await manager.init();
+      manager.add({ infohash: HASH_A, magnet: `magnet:?xt=urn:btih:${HASH_A}`, name: "A" });
+      client.fireMetadata(HASH_A, { name: "Album 2026", total: 123456 });
+      const item = manager.get(HASH_A)!;
+      expect(item.status).toBe("downloading");
+      expect(item.size).toBe(123456);
+      expect(item.diagnostics!.metadata).toBe("received");
+      await manager.suspend();
+    });
+  });
+
+  describe("stalled detection", () => {
+    it("marks a metadata-known download stalled after sustained zero activity and reverts on activity", async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new ManualClient();
+        const { manager } = makeManager(client, { seedAfterComplete: false });
+        await manager.init();
+        manager.add({ infohash: HASH_A, magnet: `magnet:?xt=urn:btih:${HASH_A}`, name: "A" });
+        expect(manager.get(HASH_A)!.status).toBe("waiting_metadata");
+
+        // Default stats report ready:true → the first tick flips to downloading.
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(manager.get(HASH_A)!.status).toBe("downloading");
+
+        // Metadata known, but no peers and no speed for > STALL_THRESHOLD.
+        client.setStats(HASH_A, { ready: true, total: 100, progress: 0, peers: 0, downloadSpeed: 0 });
+        await vi.advanceTimersByTimeAsync(31_000);
+        expect(manager.get(HASH_A)!.status).toBe("stalled");
+
+        // Activity resumes → back to downloading.
+        client.setStats(HASH_A, { progress: 0.5, downloadSpeed: 100 });
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(manager.get(HASH_A)!.status).toBe("downloading");
+        await manager.suspend();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("counts stalled items as active and lets them complete", async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new ManualClient();
+        const { manager } = makeManager(client, { seedAfterComplete: false });
+        await manager.init();
+        manager.add({ infohash: HASH_A, magnet: `magnet:?xt=urn:btih:${HASH_A}`, name: "A" });
+        await vi.advanceTimersByTimeAsync(1_000);
+        client.setStats(HASH_A, { ready: true, total: 100, progress: 0, peers: 0, downloadSpeed: 0 });
+        await vi.advanceTimersByTimeAsync(31_000);
+        expect(manager.get(HASH_A)!.status).toBe("stalled");
+        expect(manager.summary().active).toBe(1);
+
+        client.fireDone(HASH_A);
+        expect(manager.get(HASH_A)!.status).toBe("completed");
+        await manager.suspend();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

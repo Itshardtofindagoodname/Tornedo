@@ -6,18 +6,21 @@
 import { EventEmitter } from "node:events";
 import type { TornedoConfig } from "../config/config.js";
 import type { TorrentStore } from "../database/store.js";
-import type { AddTorrentInput, DownloadSummary, TorrentItem, TorrentStatus } from "../model/torrent.js";
+import type { AddTorrentInput, DownloadSummary, TorrentDiagnostics, TorrentItem, TorrentStatus } from "../model/torrent.js";
 import type { TorrentClient, TorrentClientHandlers } from "../torrent/client.js";
-import { buildMagnet, parseInput } from "../torrent/parse.js";
+import { buildMagnet, mergeTrackers, parseInput, PUBLIC_TRACKERS } from "../torrent/parse.js";
 
 const POLL_MS = 500;
-/** Max time (ms) to wait for metadata before declaring the item failed. */
-const METADATA_TIMEOUT_MS = 30_000;
+/** Discovery needs more than a fixed 30-second window on cold DHT paths. */
+const METADATA_RETRY_BASE_MS = 60_000;
+const METADATA_RETRY_MAX_MS = 10 * 60_000;
 /** Seeding grace before the stray-download detector starts watching. */
 const SEED_GRACE_MS = 10_000;
 const STRAY_TICKS = 3;
 /** Persist progress changes at most this often. */
 const PERSIST_INTERVAL_MS = 1_000;
+/** Metadata known but no peers/speed for this long flips the row to STALLED. */
+const STALL_THRESHOLD_MS = 30_000;
 
 export interface TorrentManagerOptions {
   client: TorrentClient;
@@ -43,8 +46,10 @@ export class TorrentManager extends EventEmitter {
   private poll: ReturnType<typeof setInterval> | null = null;
   private persistTimer: ReturnType<typeof setInterval> | null = null;
   private dirty = new Set<string>();
-  private strayHits = new Map<string, number>();
+private strayHits = new Map<string, number>();
   private startedAt = new Map<string, number>();
+  private metadataRetries = new Map<string, number>();
+  private stalledSince = new Map<string, number>();
   private disposed = false;
 
   constructor(opts: TorrentManagerOptions) {
@@ -113,10 +118,17 @@ export class TorrentManager extends EventEmitter {
     return this.items.has(id);
   }
 
-  private activeCount(): number {
+private activeCount(): number {
     let n = 0;
     for (const it of this.items.values()) {
-      if (it.status === "downloading" || it.status === "starting" || it.status === "checking") n++;
+      if (
+        it.status === "downloading" ||
+        it.status === "starting" ||
+        it.status === "waiting_metadata" ||
+        it.status === "stalled" ||
+        it.status === "checking"
+      )
+        n++;
     }
     return n;
   }
@@ -141,9 +153,11 @@ export class TorrentManager extends EventEmitter {
       totalUploadSpeed: 0,
     };
     for (const it of this.items.values()) {
-      switch (it.status) {
+switch (it.status) {
         case "downloading":
         case "starting":
+        case "waiting_metadata":
+        case "stalled":
         case "checking":
           out.active++;
           out.totalDownloadSpeed += it.downloadSpeed;
@@ -213,7 +227,11 @@ export class TorrentManager extends EventEmitter {
       lastUpdated: Date.now(),
       error: null,
       files: null,
+      diagnostics: initialDiagnostics(input.magnet, infohash),
     };
+    if (process.env.TORNEDO_DIAGNOSTICS === "1") {
+      process.stderr.write(`[tornedo:diagnostics] ${id} magnet parsed ${JSON.stringify(item.diagnostics)}\n`);
+    }
     this.items.set(id, item);
     this.markDirty(id, { persist: true });
     this.schedule();
@@ -247,7 +265,7 @@ export class TorrentManager extends EventEmitter {
   }
 
   private startItem(item: TorrentItem): void {
-    this.setStatus(item, "starting");
+    this.setStatus(item, "waiting_metadata");
     item.error = null;
     item.startedAt = Date.now();
     this.startedAt.set(item.id, Date.now());
@@ -258,6 +276,7 @@ export class TorrentManager extends EventEmitter {
           id: item.id,
           source: item.magnet,
           destination: item.destination,
+          announce: [...PUBLIC_TRACKERS],
         },
         handlers,
       );
@@ -275,7 +294,8 @@ export class TorrentManager extends EventEmitter {
         if (meta.total) it.size = meta.total;
         it.files = meta.files;
         if (meta.torrentFile) this.store.saveCache(id, meta.torrentFile);
-        if (it.status === "starting") this.setStatus(it, "downloading");
+        it.diagnostics = { ...it.diagnostics!, metadata: "received", nextRetry: null, connection: "downloading", lastEvent: "torrent metadata received" };
+        if (it.status === "starting" || it.status === "waiting_metadata") this.setStatus(it, "downloading");
         this.markDirty(id);
       },
       onDone: (_id) => {
@@ -287,7 +307,7 @@ export class TorrentManager extends EventEmitter {
           this.startedAt.delete(id);
           return;
         }
-        if (it.status === "downloading" || it.status === "starting" || it.status === "checking") {
+if (it.status === "downloading" || it.status === "starting" || it.status === "waiting_metadata" || it.status === "stalled" || it.status === "checking") {
           this.completeItem(it);
         }
       },
@@ -315,6 +335,13 @@ export class TorrentManager extends EventEmitter {
           it.error = null;
           // Warnings are informational; keep any prior error untouched.
         }
+      },
+      onDiagnostics: (_id, patch) => {
+        const it = this.items.get(id);
+        if (!it) return;
+        it.diagnostics = { ...it.diagnostics!, ...patch };
+        it.lastUpdated = Date.now();
+        this.changed();
       },
       onProgress: (_id, progress) => {
         const it = this.items.get(id);
@@ -354,6 +381,7 @@ export class TorrentManager extends EventEmitter {
     this.client.remove(it.id);
     this.strayHits.delete(it.id);
     this.startedAt.delete(it.id);
+    this.stalledSince.delete(it.id);
     it.status = "error";
     it.error = message;
     it.downloadSpeed = 0;
@@ -376,7 +404,7 @@ export class TorrentManager extends EventEmitter {
       this.pauseSeeding(id);
       return;
     }
-    if (it.status !== "downloading" && it.status !== "starting" && it.status !== "queued") return;
+if (it.status !== "downloading" && it.status !== "starting" && it.status !== "waiting_metadata" && it.status !== "stalled" && it.status !== "queued") return;
     const was = it.status;
     this.client.remove(id);
     it.status = "paused";
@@ -387,6 +415,7 @@ export class TorrentManager extends EventEmitter {
     it.lastUpdated = Date.now();
     this.strayHits.delete(id);
     this.startedAt.delete(id);
+    this.stalledSince.delete(id);
     this.emit("statusChanged", it, was, "paused");
     this.markDirty(it.id, { persist: true });
     this.changed();
@@ -440,6 +469,7 @@ export class TorrentManager extends EventEmitter {
     this.items.delete(id);
     this.strayHits.delete(id);
     this.startedAt.delete(id);
+    this.stalledSince.delete(id);
     this.store.delete(id);
     this.store.deleteCache(id);
     if (opts.deleteFiles && it.destination && it.name) {
@@ -538,6 +568,7 @@ export class TorrentManager extends EventEmitter {
           id: it.id,
           source,
           destination: it.destination,
+          announce: [...PUBLIC_TRACKERS],
         },
         this.handlersFor(it.id),
       );
@@ -560,9 +591,11 @@ export class TorrentManager extends EventEmitter {
     const max = cfg.maxActiveDownloads <= 0 ? Infinity : cfg.maxActiveDownloads;
     let active = 0;
     for (const it of this.items.values()) {
-      switch (it.status) {
+switch (it.status) {
         case "downloading":
         case "starting":
+        case "waiting_metadata":
+        case "stalled":
         case "checking":
           if (active < max) {
             this.startItem(it);
@@ -600,6 +633,7 @@ export class TorrentManager extends EventEmitter {
           id: it.id,
           source,
           destination: it.destination,
+          announce: [...PUBLIC_TRACKERS],
         },
         this.handlersFor(it.id),
       );
@@ -615,26 +649,41 @@ export class TorrentManager extends EventEmitter {
   private tick(): void {
     const now = Date.now();
     for (const it of this.items.values()) {
-      if (it.status === "seeding") {
+if (it.status === "seeding") {
         this.tickSeed(it, now);
-      } else if (it.status === "downloading" || it.status === "starting" || it.status === "checking") {
+      } else if (
+        it.status === "downloading" ||
+        it.status === "starting" ||
+        it.status === "waiting_metadata" ||
+        it.status === "stalled" ||
+        it.status === "checking"
+      ) {
         this.tickActive(it, now);
       }
     }
   }
 
-  private tickActive(it: TorrentItem, now: number): void {
+private tickActive(it: TorrentItem, now: number): void {
     const s = this.client.get(it.id);
-    if (it.status === "starting") {
+    if (it.status === "starting" || it.status === "waiting_metadata") {
       const started = this.startedAt.get(it.id) ?? it.startedAt ?? now;
       if (s) {
-        if (s.ready || s.total > 0 || s.progress > 0 || s.peers > 0) {
-          this.setStatus(it, "downloading");
-        }
+        if (s.ready || s.total > 0 || s.progress > 0) this.setStatus(it, "downloading");
       }
-      if (now - started > METADATA_TIMEOUT_MS) {
-        this.fail(it, "No peers found for metadata (timeout)");
-        return;
+      const retryAt = it.diagnostics?.nextRetry ?? started + METADATA_RETRY_BASE_MS;
+      if (now >= retryAt) {
+        const attempts = (this.metadataRetries.get(it.id) ?? 0) + 1;
+        this.metadataRetries.set(it.id, attempts);
+        const delay = Math.min(METADATA_RETRY_BASE_MS * 2 ** attempts, METADATA_RETRY_MAX_MS);
+        it.diagnostics = {
+          ...it.diagnostics!,
+          metadata: "timeout",
+          metadataRetries: attempts,
+          nextRetry: now + delay,
+          lastEvent: "METADATA TIMEOUT; discovery retry scheduled",
+        };
+        this.client.retryMetadata(it.id);
+        this.changed();
       }
     }
     if (!s) return;
@@ -650,6 +699,36 @@ export class TorrentManager extends EventEmitter {
     if (s.name && !it.name) it.name = s.name;
     it.lastUpdated = now;
     this.markDirty(it.id);
+
+    // STALLED detection: metadata is known but discovery/progress has dried up.
+    // Any peer or transfer activity immediately reverts a stalled item to
+    // downloading; a stalled item is never failed automatically.
+    if (it.status === "downloading") {
+      const hasActivity = s.peers > 0 || s.downloadSpeed > 0 || s.progress > 0;
+      if (hasActivity) {
+        this.stalledSince.delete(it.id);
+      } else {
+        const since = this.stalledSince.get(it.id) ?? now;
+        this.stalledSince.set(it.id, since);
+        if (now - since >= STALL_THRESHOLD_MS) {
+          this.setStatus(it, "stalled");
+          if (it.diagnostics) {
+            it.diagnostics = { ...it.diagnostics, lastEvent: "no peers or progress; marked stalled (still retrying)" };
+          }
+          this.changed();
+        }
+      }
+    } else if (it.status === "stalled") {
+      const hasActivity = s.peers > 0 || s.downloadSpeed > 0 || s.progress > 0;
+      if (hasActivity) {
+        this.stalledSince.delete(it.id);
+        this.setStatus(it, "downloading");
+        if (it.diagnostics) {
+          it.diagnostics = { ...it.diagnostics, lastEvent: "activity resumed; no longer stalled" };
+        }
+        this.changed();
+      }
+    }
   }
 
   private tickSeed(it: TorrentItem, now: number): void {
@@ -764,6 +843,44 @@ export class TorrentManager extends EventEmitter {
   destroy(): Promise<void> {
     return this.suspend();
   }
+}
+
+function initialDiagnostics(magnet: string, infohash: string): TorrentDiagnostics {
+  const parsed = parseInput(magnet);
+  const trackerUrls = mergeTrackers(parsed?.trackers ?? [], PUBLIC_TRACKERS);
+  return {
+    magnetValid: Boolean(parsed),
+    infohashPresent: parsed?.infoHash === infohash,
+    magnetUri: magnet,
+    displayName: parsed?.name ?? infohash,
+    trackerUrls,
+    trackerTotal: trackerUrls.length,
+    trackerHealthy: 0,
+    dht: "starting",
+    dhtEnabled: true,
+    dhtListening: false,
+    dhtBootstrapped: false,
+    dhtPort: null,
+    dhtAddress: null,
+    dhtFamily: null,
+    dhtRoutingTable: "initializing",
+    dhtRoutingNodes: 0,
+    dhtQueries: 0,
+    dhtResponses: 0,
+    dhtLastQuery: null,
+    peersDiscovered: 0,
+    ipv4Peers: 0,
+    ipv6Peers: 0,
+    metadata: "waiting",
+    metadataRequests: 0,
+    metadataResponses: 0,
+    lastMetadataAttempt: null,
+    nextRetry: null,
+    metadataRetries: 0,
+    connection: "idle",
+    engineState: "created",
+    lastEvent: "magnet parsed",
+  };
 }
 
 /**

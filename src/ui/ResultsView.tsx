@@ -114,6 +114,13 @@ function SourceStrip({
   );
   if (!reports || reports.size === 0) return null;
   const entries = [...reports.entries()];
+  const kindLabel: Record<NonNullable<SourceReport["failure"]>["kind"], string> = {
+    timeout: "timeout",
+    http: "HTTP",
+    parse: "parse",
+    unavailable: "down",
+    cancelled: "aborted",
+  };
   return (
     <Box height={1} paddingLeft={1} gap={2}>
       {entries.map(([id, r]) => {
@@ -121,7 +128,11 @@ function SourceStrip({
         const color =
           r.status === "ok" ? sourceColor(id) : r.status === "error" ? palette.red : palette.dim;
         const text =
-          r.status === "ok" ? `${name}:${r.results}` : r.status === "error" ? `${name}:✗` : `${name}:…`;
+          r.status === "ok"
+            ? `${name}:${r.results}`
+            : r.status === "error"
+              ? `${name}:✗${r.failure ? ` ${kindLabel[r.failure.kind]}` : ""}`
+              : `${name}:…`;
         return (
           <Text key={id} color={color} wrap="truncate">
             {text}

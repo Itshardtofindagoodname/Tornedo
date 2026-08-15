@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SearchEngine } from "../src/search/engine.js";
 import type { SearchEmitter, SearchSummary, SourceAdapter } from "../src/model/source.js";
-import { CancelledError } from "../src/sources/net.js";
+import { CancelledError, ParseError } from "../src/sources/net.js";
 import { fakeSource, failingSource, hangingSource, result } from "./helpers/fixtures.js";
 
 function makeEngine(sources: SourceAdapter[], enabled: string[] = []) {
@@ -80,6 +80,29 @@ describe("SearchEngine", () => {
       ["a"],
     );
     const { summary } = await collect(engine, { query: "x" });
+    expect(summary.sourcesSucceeded).toBe(1);
+  });
+
+  it("classifies ParseError as a parse failure and keeps other sources alive", async () => {
+    const engine = makeEngine([
+      failingSource("broken", "Broken", new ParseError("listing structure unrecognized")),
+      fakeSource("music", "Music", [result({ infohash: "aa".repeat(20), title: "Album", category: "Music" })]),
+    ]);
+    const { summary, events } = await collect(engine, { query: "album" });
+    expect(summary.sourcesSucceeded).toBe(1);
+    expect(summary.sourcesFailed).toBe(1);
+    expect(events).toContain("err:broken:parse");
+    expect(events).toContain("ok:music:1");
+    expect(events).toContain("done:1/1");
+  });
+
+  it("a parse failure can never zero out results from healthy sources", async () => {
+    const engine = makeEngine([
+      failingSource("broken", "Broken", new ParseError("structure changed")),
+      fakeSource("good", "Good", [result({ infohash: "bb".repeat(20), title: "Album FLAC", category: "Music" })]),
+    ]);
+    const { summary } = await collect(engine, { query: "album" });
+    expect(summary.totalResults).toBe(1);
     expect(summary.sourcesSucceeded).toBe(1);
   });
 

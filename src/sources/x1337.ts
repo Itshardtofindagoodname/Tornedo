@@ -5,7 +5,7 @@
  */
 import type { MediaCategory, SearchResult } from "../model/search.js";
 import type { SearchContext, SourceAdapter } from "../model/source.js";
-import { fetchText, HttpError } from "./net.js";
+import { fetchText, HttpError, ParseError } from "./net.js";
 import { unescapeEntities } from "./rss.js";
 import { buildMagnet, normalizeInfoHash } from "../torrent/parse.js";
 
@@ -79,11 +79,15 @@ export function parseUploadDate(html: string): number | undefined {
   return Number.isNaN(secs) ? undefined : secs;
 }
 
+type DetailOutcome =
+  | { ok: true; magnet: string; added?: number }
+  | { ok: false; kind: "parse" | "http" };
+
 async function detailInfo(
   base: string,
   path: string,
   ctx: SearchContext,
-): Promise<{ magnet: string; added?: number } | null> {
+): Promise<DetailOutcome> {
   try {
     const html = await fetchText(`${base}${path}`, {
       signal: ctx.signal,
@@ -91,10 +95,10 @@ async function detailInfo(
       retries: 1,
     });
     const raw = html.match(/magnet:\?xt=urn:btih:[^"'<>\s]+/i)?.[0];
-    if (!raw) return null;
-    return { magnet: unescapeEntities(raw), added: parseUploadDate(html) };
+    if (!raw) return { ok: false, kind: "parse" };
+    return { ok: true, magnet: unescapeEntities(raw), added: parseUploadDate(html) };
   } catch {
-    return null;
+    return { ok: false, kind: "http" };
   }
 }
 
@@ -138,6 +142,11 @@ async function search(
   if (!base) throw lastError instanceof Error ? lastError : new HttpError(0, "1337x unreachable");
 
   const all = parseRows(html);
+  // The listing answered but the table structure we scrape is gone. Report a
+  // parse failure rather than silently claiming "zero results".
+  if (all.length === 0 && !/table-list/.test(html)) {
+    throw new ParseError(`${sourceId}: listing structure unrecognized`);
+  }
   const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
   const meaningful = tokens.filter((t) => !STOP.has(t));
   const need = meaningful.length > 0 ? meaningful : tokens;
@@ -150,25 +159,46 @@ async function search(
   matched.sort((a, b) => b.seeders - a.seeders);
   const rows = matched.slice(0, MAX_DETAILS);
 
-  const settled = await Promise.all(
-    rows.map(async (row): Promise<SearchResult | null> => {
-      const detail = await detailInfo(base, row.path, ctx);
-      const infoHash = normalizeInfoHash(detail?.magnet?.match(/urn:btih:([a-zA-Z0-9]+)/i)?.[1] ?? "");
-      if (!detail || !infoHash) return null;
-      return {
-        infohash: infoHash,
-        title: row.name,
-        size: row.sizeBytes || undefined,
-        seeders: row.seeders || undefined,
-        leechers: row.leechers || undefined,
-        sourceId,
-        category,
-        magnet: detail.magnet,
-        added: detail.added,
-      };
-    }),
-  );
-  return settled.filter((r): r is SearchResult => r !== null);
+  const details = await Promise.all(rows.map((row) => detailInfo(base, row.path, ctx)));
+  const results: SearchResult[] = [];
+  let parseCount = 0;
+  let httpCount = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    const detail = details[i]!;
+    if (detail.ok) {
+      const infoHash = normalizeInfoHash(detail.magnet.match(/urn:btih:([a-zA-Z0-9]+)/i)?.[1] ?? "");
+      if (infoHash) {
+        results.push({
+          infohash: infoHash,
+          title: row.name,
+          size: row.sizeBytes || undefined,
+          seeders: row.seeders || undefined,
+          leechers: row.leechers || undefined,
+          sourceId,
+          category,
+          magnet: detail.magnet,
+          added: detail.added,
+        });
+      } else {
+        parseCount++;
+      }
+    } else if (detail.kind === "parse") {
+      parseCount++;
+    } else {
+      httpCount++;
+    }
+  }
+  if (results.length > 0) return results;
+  if (rows.length === 0) return [];
+
+  // No magnet from any detail page. If at least one page loaded but contained
+  // no magnet, the detail-page structure changed → parse failure. If all pages
+  // failed at the network layer, it is availability, not parsing.
+  if (parseCount > 0) {
+    throw new ParseError(`${sourceId}: no magnet found in any of ${rows.length} detail pages (${parseCount} unparsable, ${httpCount} http errors)`);
+  }
+  throw new HttpError(0, `${sourceId}: all ${rows.length} detail pages failed to load`);
 }
 
 export const x1337Movies: SourceAdapter = {

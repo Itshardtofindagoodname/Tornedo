@@ -6,8 +6,10 @@ import type { ReleaseMetadata } from "./search.js";
 
 export type TorrentStatus =
   | "queued"
+  | "waiting_metadata"
   | "starting"
   | "downloading"
+  | "stalled"
   | "paused"
   | "completed"
   | "seeding"
@@ -17,8 +19,10 @@ export type TorrentStatus =
 
 export const TORRENT_STATUSES: readonly TorrentStatus[] = [
   "queued",
+  "waiting_metadata",
   "starting",
   "downloading",
+  "stalled",
   "paused",
   "completed",
   "seeding",
@@ -29,6 +33,7 @@ export const TORRENT_STATUSES: readonly TorrentStatus[] = [
 
 /** Statuses that occupy an active download slot. */
 export const ACTIVE_DOWNLOAD_STATUSES: ReadonlySet<TorrentStatus> = new Set([
+  "waiting_metadata",
   "starting",
   "downloading",
   "checking",
@@ -36,11 +41,58 @@ export const ACTIVE_DOWNLOAD_STATUSES: ReadonlySet<TorrentStatus> = new Set([
 
 /** Statuses the engine may be serving a live handle for. */
 export const ENGINE_STATUSES: ReadonlySet<TorrentStatus> = new Set([
+  "waiting_metadata",
   "starting",
   "downloading",
   "checking",
   "seeding",
 ]);
+
+/** Live discovery and metadata-exchange telemetry for the current engine session. */
+export interface TorrentDiagnostics {
+  magnetValid: boolean;
+  infohashPresent: boolean;
+  magnetUri: string;
+  displayName: string;
+  trackerUrls: string[];
+  trackerTotal: number;
+  trackerHealthy: number;
+  /**
+   * DHT lifecycle label. "ready" means the UDP socket is bound AND the library
+   * reported bootstrap complete; it says nothing about routing-table health
+   * (see dhtRoutingTable/dhtRoutingNodes for that).
+   */
+  dht: "disabled" | "starting" | "listening" | "bootstrapping" | "ready" | "failed";
+  /** DHT was enabled for this client. */
+  dhtEnabled: boolean;
+  /** UDP socket is bound. */
+  dhtListening: boolean;
+  /** DHT bootstrap populate finished (the library's `ready` event). */
+  dhtBootstrapped: boolean;
+  dhtPort: number | null;
+  dhtAddress: string | null;
+  dhtFamily: string | null;
+  /** Routing table has learned at least one node. */
+  dhtRoutingTable: "initializing" | "ready" | "empty";
+  dhtRoutingNodes: number;
+  /** DHT announce/lookup cycles completed for this torrent. */
+  dhtQueries: number;
+  /** Routing-table nodes learned (each implies a DHT response received). */
+  dhtResponses: number;
+  dhtLastQuery: number | null;
+  peersDiscovered: number;
+  ipv4Peers: number;
+  ipv6Peers: number;
+  metadata: "waiting" | "requesting" | "received" | "timeout";
+  metadataRequests: number;
+  metadataResponses: number;
+  lastMetadataAttempt: number | null;
+  nextRetry: number | null;
+  metadataRetries: number;
+  connection: "idle" | "discovering" | "connected" | "downloading";
+  engineState: "created" | "discovering" | "metadata_received" | "destroyed";
+  lastEvent: string | null;
+}
 
 export interface TorrentStats {
   /** 0..1 */
@@ -102,6 +154,7 @@ export interface TorrentItem {
   error: string | null;
   /** Number of files once metadata is known. */
   files: number | null;
+  diagnostics?: TorrentDiagnostics;
 }
 
 /** Input for adding a torrent to the manager. */

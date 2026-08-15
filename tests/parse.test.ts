@@ -6,6 +6,8 @@ import {
   parseInput,
   isInfoHash,
   parseTorrentBuffer,
+  mergeTrackers,
+  PUBLIC_TRACKERS,
 } from "../src/torrent/parse.js";
 
 const HEX = "0123456789abcdef0123456789abcdef01234567";
@@ -63,6 +65,32 @@ describe("parseMagnet / parseInput", () => {
 
   it("returns null for non-torrent input", () => {
     expect(parseInput("https://example.com/foo")).toBeNull();
+  });
+});
+
+describe("mergeTrackers", () => {
+  it("keeps embedded trackers first and appends fallbacks without duplicates", () => {
+    const merged = mergeTrackers(
+      ["udp://tracker.example:80/announce", "udp://tracker.example:80/announce"],
+      PUBLIC_TRACKERS,
+    );
+    expect(merged[0]).toBe("udp://tracker.example:80/announce");
+    expect(merged.filter((t) => t === "udp://tracker.example:80/announce")).toHaveLength(1);
+    expect(merged.length).toBe(1 + PUBLIC_TRACKERS.length);
+  });
+
+  it("strips whitespace and empty entries", () => {
+    expect(mergeTrackers(["  ", "udp://a", "udp://b  "], [])).toEqual(["udp://a", "udp://b"]);
+  });
+
+  it("is stable even when fallback overlaps the embedded list", () => {
+    const merged = mergeTrackers([PUBLIC_TRACKERS[0]!], [PUBLIC_TRACKERS[0]!, PUBLIC_TRACKERS[1]!]);
+    expect(merged).toEqual([PUBLIC_TRACKERS[0], PUBLIC_TRACKERS[1]]);
+  });
+
+  it("exports a non-empty public fallback list", () => {
+    expect(PUBLIC_TRACKERS.length).toBeGreaterThan(0);
+    expect(PUBLIC_TRACKERS.every((t) => /^(udp|http|https):\/\//.test(t))).toBe(true);
   });
 });
 

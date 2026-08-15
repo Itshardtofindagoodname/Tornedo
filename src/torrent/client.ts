@@ -2,13 +2,14 @@
  * TorrentClient abstraction. All torrent-engine access flows through this
  * interface so the rest of Tornedo never touches a library-specific object.
  */
-import type { TorrentMeta, TorrentStats } from "../model/torrent.js";
+import type { TorrentDiagnostics, TorrentMeta, TorrentStats } from "../model/torrent.js";
 
 export interface TorrentClientHandlers {
   onMetadata(id: string, meta: TorrentMeta): void;
   onDone(id: string): void;
   onError(id: string, message: string): void;
   onWarning(id: string, message: string): void;
+  onDiagnostics?(id: string, diagnostics: Partial<TorrentDiagnostics>): void;
   /** Optional live progress (0..1). Torrent engines poll instead; yt-dlp reports. */
   onProgress?(id: string, progress: number): void;
 }
@@ -48,6 +49,8 @@ export interface TorrentClient {
   remove(id: string): void;
   /** Latest stats for a torrent, or null when unknown. */
   get(id: string): TorrentStats | null;
+  /** Re-announce the existing handle without restarting the torrent. */
+  retryMetadata(id: string): void;
   /** Aggregate client stats. */
   stats(): ClientStats;
   /** Apply global speed limits. */

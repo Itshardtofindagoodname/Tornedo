@@ -58,7 +58,11 @@ export function parseRssItem(item: string): RssItem {
   const title = unescapeEntities(extractTag(item, "title"));
   const link = unescapeEntities(extractTag(item, "link"));
   const pubDate = extractTag(item, "pubDate");
-  const magnet = item.match(/href="(magnet:\?xt=urn:btih:[^"]+)"/i)?.[1] ?? undefined;
+  // FitGirl (and other WordPress feeds) HTML-entity-escape the ampersands inside
+  // magnets (e.g. `&#038;dn=`), which would mangle every `tr`/`dn` param. The
+  // infohash survives, but the mangled announce URLs break discovery.
+  const rawMagnet = item.match(/href="(magnet:\?xt=urn:btih:[^"]+)"/i)?.[1] ?? undefined;
+  const magnet = rawMagnet ? unescapeEntities(rawMagnet) : undefined;
   const sizeRaw = extractTag(item, "nyaa:size") || extractTag(item, "size") || undefined;
   const seeders = extractTag(item, "nyaa:seeders") || undefined;
   const leechers = extractTag(item, "nyaa:leechers") || undefined;

@@ -4,7 +4,12 @@
 import parseTorrent from "parse-torrent";
 import type { ParsedTorrent } from "parse-torrent";
 
-const PUBLIC_TRACKERS: readonly string[] = [
+/**
+ * Fallback public trackers. These are appended (never replacing trackers that
+ * are already embedded in a magnet) to every torrent the download pipeline
+ * starts, so discovery works even on a cold DHT.
+ */
+export const PUBLIC_TRACKERS: readonly string[] = [
   "udp://tracker.opentrackr.org:1337/announce",
   "udp://open.demonii.com:1337/announce",
   "udp://tracker.openbittorrent.com:6969/announce",
@@ -16,6 +21,22 @@ const PUBLIC_TRACKERS: readonly string[] = [
   "http://tracker.openbittorrent.com:80/announce",
   "https://tracker.tamersunion.org:443/announce",
 ];
+
+/**
+ * Merge a torrent's own trackers with the fallback list, preserving order and
+ * de-duplicating. Existing trackers are kept first and never replaced.
+ */
+export function mergeTrackers(existing: readonly string[], fallback: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of [...existing, ...fallback]) {
+    const s = t.trim();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
 
 export const INFOHASH_HEX_RE = /^[a-f0-9]{40}$/i;
 export const INFOHASH_BASE32_RE = /^[a-z2-7]{32}$/i;
