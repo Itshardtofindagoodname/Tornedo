@@ -137,6 +137,13 @@ useEffect(() => {
     const idx = Math.min(selected, Math.max(0, rels.length - 1));
     const r = rels[idx];
     if (!r) return;
+    // Some providers (Internet Archive) expose direct-download items, not
+    // BitTorrent magnets. The engine is torrent-only, so refuse loudly instead
+    // of queueing something that can never resolve.
+    if (r.magnet && !/^magnet:/i.test(r.magnet)) {
+      showMessage(`Direct-download source (${r.category}); the torrent engine cannot fetch "${truncate(r.magnet, 30)}"`);
+      return;
+    }
     const cfg = app.getConfig();
     const item = app.manager.add({
       infohash: r.infohash,
@@ -144,6 +151,7 @@ useEffect(() => {
       name: r.title,
       category: r.category,
       metadata: r.metadata,
+      size: r.size,
       destination: destination ?? cfg.downloadDir,
       seedEnabled: cfg.seedAfterComplete,
     });

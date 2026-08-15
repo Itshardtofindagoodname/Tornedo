@@ -10,6 +10,7 @@ import { TorrentStore } from "../database/store.js";
 import { TorrentManager } from "../downloads/manager.js";
 import type { SourceAdapter } from "../model/source.js";
 import { SearchEngine } from "../search/engine.js";
+import { dynamicSources } from "../sources/dynamic.js";
 import { SOURCES } from "../sources/registry.js";
 import type { TorrentClient } from "../torrent/client.js";
 import { WebTorrentClient } from "../torrent/webtorrent.js";
@@ -29,10 +30,10 @@ export class Application {
   readonly db: DatabaseHandle;
   readonly store: TorrentStore;
   readonly manager: TorrentManager;
-  readonly searchEngine: SearchEngine;
-  readonly searchService: SearchService;
-  readonly sources: readonly SourceAdapter[];
-  readonly healthSources: ReadonlySet<string>;
+  sources: readonly SourceAdapter[];
+  healthSources: ReadonlySet<string>;
+  searchEngine!: SearchEngine;
+  searchService!: SearchService;
 
   private configState: TornedoConfig;
   private client: TorrentClient;
@@ -52,18 +53,7 @@ export class Application {
       getConfig: () => this.configState,
     });
 
-    this.searchEngine = new SearchEngine({
-      sources: SOURCES,
-      isEnabled: (id) => this.isSourceEnabled(id),
-      defaultTimeoutMs: 15_000,
-      maxConcurrentSources: 8,
-    });
-
-    this.searchService = new SearchService({
-      engine: this.searchEngine,
-      healthSources: this.healthSources,
-      getRank: () => this.configState.ranking,
-    });
+    this.rebuildSources();
   }
 
   static async create(opts: ApplicationOptions = {}): Promise<Application> {
@@ -71,9 +61,31 @@ export class Application {
     await app.manager.init();
     if (!opts.freshConfig) {
       app.configState = await ensureConfigMigrated();
+      app.rebuildSources();
       app.manager.applyConfig();
     }
     return app;
+  }
+
+  /**
+   * Rebuild the source set from the current config. Called once config is
+   * loaded (and again on `config set` / reload) so user-configured Torznab and
+   * Internet Archive providers take effect immediately.
+   */
+  private rebuildSources(): void {
+    this.sources = [...SOURCES, ...dynamicSources(this.configState)];
+    this.healthSources = new Set(this.sources.filter((s) => s.reportsHealth).map((s) => s.id));
+    this.searchEngine = new SearchEngine({
+      sources: this.sources,
+      isEnabled: (id) => this.isSourceEnabled(id),
+      defaultTimeoutMs: 15_000,
+      maxConcurrentSources: 8,
+    });
+    this.searchService = new SearchService({
+      engine: this.searchEngine,
+      healthSources: this.healthSources,
+      getRank: () => this.configState.ranking,
+    });
   }
 
   getConfig(): TornedoConfig {
@@ -93,6 +105,7 @@ export class Application {
   async updateConfig(patch: Partial<TornedoConfig>): Promise<void> {
     this.configState = { ...this.configState, ...patch };
     await this.persistConfig();
+    this.rebuildSources();
     this.manager.applyConfig();
   }
 
@@ -107,6 +120,7 @@ export class Application {
   /** Load config fresh (e.g. after the `config` command edits the file). */
   async reloadConfig(): Promise<void> {
     this.configState = await loadConfig();
+    this.rebuildSources();
     this.manager.applyConfig();
   }
 

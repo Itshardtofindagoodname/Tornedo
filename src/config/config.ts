@@ -63,6 +63,39 @@ export interface RankingConfig {
   preferLarger: boolean;
 }
 
+/**
+ * A user-configured Torznab-compatible endpoint (a local indexer such as a
+ * Prowlarr/Jackett instance or any Newznab/Torznab server). Tornedo never
+ * assumes a specific tracker; the endpoint reports its own capabilities.
+ */
+export interface TorznabProviderConfig {
+  /** Optional stable id; defaults to `torznab:<index>` in the list. */
+  id?: string;
+  /** Human-readable name shown in source lists. */
+  name?: string;
+  /** Base URL of the Torznab API (e.g. http://localhost:9117/api/v1). */
+  baseUrl: string;
+  /** API key (apikey param). Optional for endpoints that need none. */
+  apiKey?: string;
+  /** Whether this provider participates in searches. */
+  enabled: boolean;
+  /** Media categories to search. Empty = all the endpoint reports. */
+  categories?: string[];
+  /** Per-request timeout in ms (falls back to sourceTimeoutMs). */
+  timeoutMs?: number;
+  /** Search priority: lower runs first when multiple providers compete. */
+  priority?: number;
+}
+
+export interface InternetArchiveConfig {
+  /** Whether the Internet Archive provider participates in searches. */
+  enabled: boolean;
+  /** Per-request timeout in ms. */
+  timeoutMs: number;
+  /** Max results to return per search. */
+  maxResults: number;
+}
+
 export interface TornedoConfig {
   downloadDir: string;
   /** 0 = unlimited concurrent active downloads. */
@@ -83,6 +116,10 @@ export interface TornedoConfig {
   keybindings: Partial<Record<KeyAction, string[]>>;
   /** Watch-mode poll interval in ms. */
   watchIntervalMs: number;
+  /** User-configured Torznab-compatible endpoints. */
+  torznabProviders: TorznabProviderConfig[];
+  /** Internet Archive provider settings. */
+  internetArchive: InternetArchiveConfig;
 }
 
 export function defaultKeybindings(): Partial<Record<KeyAction, string[]>> {
@@ -129,6 +166,12 @@ export function defaultConfig(): TornedoConfig {
     theme: "default",
     keybindings: defaultKeybindings(),
     watchIntervalMs: 2_000,
+    torznabProviders: [],
+    internetArchive: {
+      enabled: false,
+      timeoutMs: 15_000,
+      maxResults: 30,
+    },
   };
 }
 
@@ -192,7 +235,44 @@ export function normalizeConfig(raw: unknown): TornedoConfig {
   if (isRanking(r.ranking)) out.ranking = r.ranking;
   if (isKeybindings(r.keybindings)) out.keybindings = r.keybindings;
 
+  if (Array.isArray(r.torznabProviders)) {
+    out.torznabProviders = r.torznabProviders.filter(isTorznabProvider).map((p) => ({
+      id: p.id?.trim() || undefined,
+      name: p.name?.trim() || undefined,
+      baseUrl: p.baseUrl.trim().replace(/\/+$/, ""),
+      apiKey: p.apiKey?.trim() || undefined,
+      enabled: p.enabled !== false,
+      categories: Array.isArray(p.categories) ? p.categories.map((c) => String(c)).filter(Boolean) : undefined,
+      timeoutMs: positiveOrUndefined(p.timeoutMs),
+      priority: positiveOrUndefined(p.priority),
+    }));
+  }
+
+  if (r.internetArchive && typeof r.internetArchive === "object") {
+    const ia = r.internetArchive as Record<string, unknown>;
+    out.internetArchive = {
+      enabled: typeof ia.enabled === "boolean" ? ia.enabled : out.internetArchive.enabled,
+      timeoutMs: positiveOrUndefined(ia.timeoutMs) ?? out.internetArchive.timeoutMs,
+      maxResults: clampInt(ia.maxResults, 1, 200, out.internetArchive.maxResults),
+    };
+  }
+
   return out;
+}
+
+function isTorznabProvider(v: unknown): v is TorznabProviderConfig {
+  if (!v || typeof v !== "object") return false;
+  const p = v as Record<string, unknown>;
+  return typeof p.baseUrl === "string" && p.baseUrl.trim().length > 0;
+}
+
+function positiveOrUndefined(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined;
+}
+
+function clampInt(v: unknown, min: number, max: number, fallback: number): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(v)));
 }
 
 export async function loadConfig(): Promise<TornedoConfig> {

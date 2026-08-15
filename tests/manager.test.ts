@@ -212,16 +212,73 @@ describe("TorrentManager", () => {
       }
     });
 
-    it("transitions to downloading with size populated once metadata arrives", async () => {
+    it("transitions resolving → ready with torrent size populated once metadata arrives", async () => {
       const client = new ManualClient();
       const { manager } = makeManager(client, { seedAfterComplete: false });
       await manager.init();
       manager.add({ infohash: HASH_A, magnet: `magnet:?xt=urn:btih:${HASH_A}`, name: "A" });
+      expect(manager.get(HASH_A)!.status).toBe("waiting_metadata");
       client.fireMetadata(HASH_A, { name: "Album 2026", total: 123456 });
       const item = manager.get(HASH_A)!;
-      expect(item.status).toBe("downloading");
+      expect(item.status).toBe("ready");
+      expect(item.torrentSize).toBe(123456);
       expect(item.size).toBe(123456);
+      expect(item.sourceSize).toBeUndefined();
+      expect(item.files).toBe(1);
       expect(item.diagnostics!.metadata).toBe("received");
+      await manager.suspend();
+    });
+
+    it("transitions ready → downloading once bytes actually flow", async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new ManualClient();
+        const { manager } = makeManager(client, { seedAfterComplete: false });
+        await manager.init();
+        manager.add({ infohash: HASH_A, magnet: `magnet:?xt=urn:btih:${HASH_A}`, name: "A" });
+        client.fireMetadata(HASH_A, { name: "Album 2026", total: 100 });
+        client.setStats(HASH_A, { ready: true, total: 100, progress: 0, downloadSpeed: 0 });
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(manager.get(HASH_A)!.status).toBe("ready");
+        client.setStats(HASH_A, { ready: true, total: 100, progress: 0.4, downloadSpeed: 2048 });
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(manager.get(HASH_A)!.status).toBe("downloading");
+        await manager.suspend();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps source size separate from torrent size until metadata is known", async () => {
+      const client = new ManualClient();
+      const { manager } = makeManager(client, { seedAfterComplete: false });
+      await manager.init();
+      // A search result with a known source-side size but no metadata yet.
+      manager.add({ infohash: HASH_A, magnet: `magnet:?xt=urn:btih:${HASH_A}`, name: "A", size: 999 });
+      let item = manager.get(HASH_A)!;
+      expect(item.sourceSize).toBe(999);
+      expect(item.torrentSize).toBeUndefined();
+      expect(item.size).toBe(999);
+      expect(item.status).toBe("waiting_metadata");
+
+      client.fireMetadata(HASH_A, { name: "Album 2026", total: 123456 });
+      item = manager.get(HASH_A)!;
+      expect(item.sourceSize).toBe(999);
+      expect(item.torrentSize).toBe(123456);
+      // The torrent's authoritative size wins once known.
+      expect(item.size).toBe(123456);
+      await manager.suspend();
+    });
+
+    it("shows an unknown size (0) for an item with neither source nor torrent size", async () => {
+      const client = new ManualClient();
+      const { manager } = makeManager(client, { seedAfterComplete: false });
+      await manager.init();
+      manager.add({ infohash: HASH_A, magnet: `magnet:?xt=urn:btih:${HASH_A}`, name: "A" });
+      const item = manager.get(HASH_A)!;
+      expect(item.sourceSize).toBeUndefined();
+      expect(item.torrentSize).toBeUndefined();
+      expect(item.size).toBe(0);
       await manager.suspend();
     });
   });

@@ -4,14 +4,26 @@
  */
 import type { CliContext } from "../context.js";
 import { searchToJson, renderSearchTable, type SourceReport } from "../render.js";
+import { MEDIA_CATEGORIES, type MediaCategory } from "../../model/search.js";
+
+const HEALTH_GLYPH: Record<SourceReport["health"], string> = {
+  healthy: "●",
+  working: "◐",
+  idle: "◌",
+  degraded: "⚠",
+  failed: "✕",
+  unsupported: "—",
+};
 
 export async function runSearch(ctx: CliContext, query: string): Promise<number> {
   if (!query.trim()) {
     throw new Error("search requires a query: tornedo search \"<query>\"");
   }
+  const category = parseCategory(ctx.args.category);
   const session = ctx.app.searchService.createSession(
     query,
     ctx.args.sources.length > 0 ? ctx.args.sources : undefined,
+    category,
   );
   const printed = new Set<string>();
 
@@ -46,13 +58,27 @@ export async function runSearch(ctx: CliContext, query: string): Promise<number>
   return session.releases().length;
 }
 
+function parseCategory(raw: string | null): MediaCategory | undefined {
+  if (!raw) return undefined;
+  const match = MEDIA_CATEGORIES.find((c) => c.toLowerCase() === raw.toLowerCase());
+  if (!match) {
+    throw new Error(`Unknown category "${raw}". Valid categories: ${MEDIA_CATEGORIES.join(", ")}`);
+  }
+  return match;
+}
+
 function statusLine(sourceId: string, report: SourceReport): string {
-  const name = sourceId;
+  const name = sourceId.padEnd(16);
+  const glyph = HEALTH_GLYPH[report.health] ?? "◌";
   if (report.status === "ok") {
-    return `${name.padEnd(14)} ✓ ${report.results} results`;
+    return `${name} ${glyph} ${report.results} results`;
   }
   if (report.status === "pending") {
-    return `${name.padEnd(14)} … searching`;
+    return `${name} ${glyph} searching`;
   }
-  return `${name.padEnd(14)} ✗ ${report.failure?.message ?? "error"}`;
+  const detail =
+    report.failure?.kind === "unsupported"
+      ? "unsupported category"
+      : report.failure?.message ?? "error";
+  return `${name} ${glyph} ${detail}`;
 }

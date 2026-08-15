@@ -12,8 +12,8 @@ import type {
   SourceAdapter,
   SourceFailure,
 } from "../model/source.js";
-import type { SearchResult } from "../model/search.js";
-import { CancelledError, ParseError } from "../sources/net.js";
+import type { MediaCategory, SearchResult } from "../model/search.js";
+import { CancelledError, ParseError, UnsupportedError } from "../sources/net.js";
 
 export interface SearchEngineOptions {
   sources: readonly SourceAdapter[];
@@ -93,6 +93,9 @@ export class SearchEngine {
           if (err instanceof ParseError) {
             return { sourceId: source.id, failure: { kind: "parse", message: err.message } };
           }
+          if (err instanceof UnsupportedError) {
+            return { sourceId: source.id, failure: { kind: "unsupported", message: err.message } };
+          }
           const status = (err as { status?: number })?.status;
           const kind = typeof status === "number" && status >= 400 ? "http" : "unavailable";
           return {
@@ -119,6 +122,11 @@ export class SearchEngine {
     const candidates = this.opts.sources.filter((s) => {
       if (!this.opts.isEnabled(s.id)) return false;
       if (requested && !requested.has(s.id)) return false;
+      if (req.category) {
+        if (!s.categories.includes(req.category) && !s.groups.some((g) => groupSupportsCategory(g, req.category!))) {
+          return false;
+        }
+      }
       return true;
     });
 
@@ -180,5 +188,25 @@ export class SearchEngine {
         });
       });
     });
+  }
+}
+
+/** Whether a source group can plausibly produce a media category. */
+function groupSupportsCategory(group: string, category: MediaCategory): boolean {
+  switch (group) {
+    case "Movies":
+      return category === "Movie";
+    case "TV":
+      return category === "TV" || category === "Anime";
+    case "Anime":
+      return category === "Anime";
+    case "Games":
+      return category === "Game";
+    case "Music":
+      return category === "Music" || category === "Podcast" || category === "Audiobook";
+    case "General":
+      return true;
+    default:
+      return false;
   }
 }

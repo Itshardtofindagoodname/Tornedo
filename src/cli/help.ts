@@ -17,6 +17,7 @@ COMMANDS
   watch <dir>       Watch a directory for .torrent / magnet files
   config            Show configuration (JSON)
   sources           List search sources and their enabled state
+  sources --check   Diagnose configured Torznab / Internet Archive providers
   tui               Launch the terminal UI (default when no command)
   help              Show this help
   version           Print the version
@@ -24,6 +25,7 @@ COMMANDS
 OPTIONS
   -j, --json          Machine-readable JSON on stdout only (for search/downloads)
   --source <id>       Restrict search to one source (repeatable)
+  --category <cat>    Restrict search to a media category (Movie, TV, Music, ...)
   --limit <n>         Limit the number of results / rows printed
   --dir <dir>         Download directory for this operation
   --seed              Enable seeding after completion (overrides config)
@@ -38,10 +40,12 @@ EXAMPLES
   tornedo search "interstellar"
   tornedo search "interstellar" --json | jq .results
   tornedo search "cyberpunk" --source fitgirl
+  tornedo search "brian eno" --category Music
   tornedo magnet "magnet:?xt=urn:btih:..."
   tornedo file ./movie.torrent
   tornedo watch ~/torrent-drop
   tornedo config set maxActiveDownloads 5
+  tornedo sources --check
 
 FILES
   Config:   <config-dir>/tornedo/config.json

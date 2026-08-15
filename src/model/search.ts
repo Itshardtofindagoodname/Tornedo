@@ -108,6 +108,12 @@ export interface SearchResult {
   category?: MediaCategory;
   /** Unix seconds. */
   added?: number;
+  /**
+   * Provider-specific metadata to preserve through normalization (e.g. an
+   * Internet Archive item's license/identifier, a Torznab uploader). Never
+   * used for ranking; purely informational.
+   */
+  sourceMetadata?: Record<string, unknown>;
 }
 
 /** A result after normalization, metadata parsing and source de-duplication. */
@@ -131,6 +137,8 @@ export interface NormalizedResult {
   sources: string[];
   /** Unix seconds, earliest observed. */
   added?: number;
+  /** Preserved provider-specific metadata (see SearchResult.sourceMetadata). */
+  sourceMetadata?: Record<string, unknown>;
 }
 
 /** One release: multiple source reports merged into a single row. */
@@ -150,6 +158,8 @@ export interface Release {
   added?: number;
   /** Aggregate ranking score (higher = better). */
   score: number;
+  /** Preserved provider-specific metadata (see SearchResult.sourceMetadata). */
+  sourceMetadata?: Record<string, unknown>;
 }
 
 /** Related releases (same title/year/season) grouped across qualities. */

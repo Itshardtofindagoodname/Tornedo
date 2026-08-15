@@ -50,6 +50,7 @@ The CLI entry point is `dist/cli.js`; `npm link` exposes the `tornedo` command.
 
 ```
 tornedo search <query>     Search every enabled source (streams results)
+tornedo search <query> --category Music
 tornedo downloads          List the queue and active torrents
 tornedo magnet <uri>       Add a torrent by magnet URI (waits for completion)
 tornedo infohash <hash>    Add a torrent by bare infohash
@@ -57,12 +58,13 @@ tornedo file <path>        Add a .torrent file
 tornedo watch <dir>        Watch a directory for .torrent / magnet files
 tornedo config             Show / set configuration
 tornedo sources            List sources and their enabled state
+tornedo sources --check    Diagnose Torznab / Internet Archive providers
 tornedo tui                Terminal UI (default when no command)
 ```
 
 Common flags: `--json` (machine-readable output on stdout only), `--source <id>`
-(repeatable), `--limit <n>`, `--dir <dir>`, `--seed` / `--no-seed`,
-`--no-wait`, `-q/--quiet`. See `tornedo help`.
+(repeatable), `--category <cat>`, `--limit <n>`, `--dir <dir>`, `--seed` /
+`--no-seed`, `--no-wait`, `-q/--quiet`. See `tornedo help`.
 
 ## Terminal UI
 
@@ -86,12 +88,28 @@ Keybindings are configurable under `keybindings` in the config file.
 ## Sources
 
 Enable/disable any source (`tornedo sources`, then
-`tornedo config set sources.<id> true|false`). Adapters: **FitGirl Repacks**
-(games), **YTS** (movies), **The Pirate Bay** (movies/TV/music), **1337x**
-(movies/TV/music), **LimeTorrents**, **TorrentGalaxy**, and **TorrentDownloads**
-(music fallbacks), **EZTV** (TV), **Nyaa** (anime), **SubsPlease** (anime), and a
-**BitTorrented** general feed. Sources that report real swarm health (seeders)
-are ranked preferentially.
+`tornedo config set sources.<id> true|false`). Built-in adapters: **FitGirl
+Repacks** (games), **YTS** (movies), **The Pirate Bay** (movies/TV/music),
+**1337x** (movies/TV/music), **LimeTorrents**, **TorrentGalaxy**, and
+**TorrentDownloads** (music), **EZTV** (TV), **Nyaa** (anime), **SubsPlease**
+(anime), and a **BitTorrented** general feed. Sources that report real swarm
+health (seeders) are ranked preferentially.
+
+User-configured providers are first-class sources:
+
+- **Torznab/Newznab** — point at any local indexer (Prowlarr, Jackett, nZEDb,
+  …). Tornedo discovers what the endpoint supports (`?t=caps`) and never
+  guesses; an endpoint without a `music` capability reports
+  `unsupported` instead of returning empty results. Configure under
+  `torznabProviders` and verify with `tornedo sources --check`.
+- **Internet Archive** — public audio items via the archive.org JSON APIs.
+  Only items with downloadable audio files are surfaced. Not a torrent swarm;
+  the UI explains why an `ia://` item cannot be queued into the torrent engine.
+  Configure under `internetArchive` (disabled by default).
+
+For music searches the robust providers above are the recommended path — the
+HTML indexers above are fast-path fallbacks and fail loudly (never silently
+empty) when their page structure changes.
 
 ## Configuration
 
@@ -111,7 +129,61 @@ Set `TORNEDO_STATE_DIR` to relocate both (also used by the test suite).
 | `sources` | `sourceId -> enabled` map |
 | `seedAfterComplete` | default seeding behavior |
 | `ranking.*` | ranking weights (seeders, quality, health, size) |
+| `keybindings.*` | action -> key names (see `tornedo help`) |
 | `watchIntervalMs` | watch-mode poll interval |
+| `torznabProviders[]` | user-configured Torznab/Newznab endpoints (see below) |
+| `internetArchive` | Internet Archive provider settings (below) |
+
+### Torznab providers
+
+`torznabProviders` is an array of objects; each entry adds one source:
+
+```json
+{
+  "torznabProviders": [
+    {
+      "id": "prowlarr",
+      "name": "Prowlarr",
+      "baseUrl": "http://localhost:9117/api/v1",
+      "apiKey": "your-api-key",
+      "enabled": true,
+      "categories": ["Music", "Movie", "TV"],
+      "timeoutMs": 15000,
+      "priority": 1
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id` | stable id (defaults to `torznab:<index>`) |
+| `name` | label shown in source lists |
+| `baseUrl` | base URL of the Torznab API (required) |
+| `apiKey` | `apikey` query param (empty for open endpoints) |
+| `enabled` | participates in searches |
+| `categories` | media categories to search (empty = whatever the endpoint reports) |
+| `timeoutMs` | per-request timeout (defaults to `sourceTimeoutMs`) |
+| `priority` | lower runs first when several providers are configured |
+
+`tornedo sources --check` fetches each endpoint's `?t=caps` and reports which
+query modes (`search` / `music` / `movie` / `tv`) it really supports.
+
+### Internet Archive
+
+```json
+{ "internetArchive": { "enabled": false, "timeoutMs": 15000, "maxResults": 30 } }
+```
+
+| Field | Meaning |
+| --- | --- |
+| `enabled` | participate in searches |
+| `timeoutMs` | per-request timeout |
+| `maxResults` | max items returned per search |
+
+Enable it with `tornedo config set internetArchive.enabled true`. Nested keys
+are settable as dotted paths; add/remove Torznab entries by editing
+`config.json` (arrays cannot be appended from the CLI).
 
 ## Development
 

@@ -46,6 +46,28 @@ export function magnetFromHtml(html: string): string | null {
   return raw ? unescapeEntities(raw) : null;
 }
 
+/**
+ * Many indexers render the magnet URI directly on the search listing (LimeTorrents,
+ * TorrentGalaxy, TorrentDownloads all do). When that happens we can emit results
+ * without the second detail-page fetch — one fewer round trip and one fewer
+ * fragile hop between the site and a usable result.
+ */
+export function parseDirectMagnets(html: string, siteId: string): SearchResult[] {
+  const seen = new Set<string>();
+  const out: SearchResult[] = [];
+  for (const match of html.matchAll(/<a\b[^>]*href\s*=\s*["'](magnet:\?xt=urn:btih:[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+    const magnet = unescapeEntities(match[1]!.trim());
+    const infohash = normalizeInfoHash(magnet.match(/urn:btih:([a-zA-Z0-9]+)/i)?.[1] ?? "");
+    if (!infohash || seen.has(infohash)) continue;
+    const title = unescapeEntities(match[2]!.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+    if (!title) continue;
+    seen.add(infohash);
+    out.push({ infohash, title, magnet, sourceId: siteId, category: "Music" as MediaCategory });
+    if (out.length === 6) break;
+  }
+  return out;
+}
+
 export function htmlMagnetMusicSource(site: HtmlMagnetSite): SourceAdapter {
   return {
     id: site.id,
@@ -60,6 +82,13 @@ export function htmlMagnetMusicSource(site: HtmlMagnetSite): SourceAdapter {
       const q = query.trim();
       if (!q) return [];
       const listing = await fetchText(site.searchUrl(q), { signal: ctx.signal, timeoutMs: ctx.timeoutMs, retries: 1 });
+
+      // Fast path: the listing already exposes magnet URIs, so no detail-page
+      // round trips are needed. This is the common case for these indexers and
+      // the most robust one (nothing else can change under us but the magnet).
+      const direct = parseDirectMagnets(listing, site.id);
+      if (direct.length > 0) return direct;
+
       const candidates = parseDetailCandidates(listing, site.detailPath);
 
       // The page answered but nothing matched the site's detail route. If the

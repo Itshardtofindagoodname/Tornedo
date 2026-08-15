@@ -6,7 +6,8 @@ import { useRef } from "react";
 import { Box, Text, useBoxMetrics, type DOMElement } from "ink";
 import type { Application } from "../app/application.js";
 import type { TorrentItem } from "../model/torrent.js";
-import { formatBytes, formatRate } from "../utils/bytes.js";
+import { metadataKnown } from "../model/torrent.js";
+import { formatBytes, formatPercent, formatRate } from "../utils/bytes.js";
 import { formatDuration } from "../utils/duration.js";
 import { ProgressBar } from "./components.js";
 import { statusColor, statusGlyph } from "./format.js";
@@ -68,22 +69,22 @@ export function DownloadsView({ app, selected, diagnostics }: DownloadsViewProps
 
 function DownloadRow({ item, selected }: { item: TorrentItem; selected: boolean }): React.ReactNode {
   const color = statusColor(item.status);
-  const speed = item.downloadSpeed > 0 ? formatRate(item.downloadSpeed) : "–";
-  const eta =
-    Number.isFinite(item.timeRemaining) && item.timeRemaining >= 0
-      ? formatDuration(item.timeRemaining)
-      : "–";
-  // Metadata is not known yet: do NOT present a fake 0 B / 0 B or 0%.
-  const resolving = (item.status === "waiting_metadata" || item.status === "starting") && item.files === null;
+  // Metadata is not known yet: never present fake 0 B / 0 B or 0/0.
   const timedOut = item.diagnostics?.metadata === "timeout";
+  const resolving = !metadataKnown(item) && !timedOut;
   const retries = (item.diagnostics?.metadataRetries ?? 0) > 0 ? ` (retry ${item.diagnostics!.metadataRetries})` : "";
-  const pct = resolving || timedOut ? "…" : `${Math.round(item.progress * 100)}%`;
+
+  const speed = resolving || timedOut ? "--" : item.downloadSpeed > 0 ? formatRate(item.downloadSpeed) : "–";
+  const eta = resolving || timedOut ? "--" : Number.isFinite(item.timeRemaining) && item.timeRemaining >= 0 ? formatDuration(item.timeRemaining) : "–";
+  const pct = resolving || timedOut ? "--" : `${Math.round(item.progress * 100)}%`;
   const size = timedOut
     ? `METADATA TIMEOUT${retries}`
     : resolving
-      ? "resolving..."
+      ? item.sourceSize
+        ? `src ${formatBytes(item.sourceSize)}`
+        : "resolving..."
       : `${formatBytes(item.downloaded)}/${formatBytes(item.size)}`;
-  const peers = `${item.peers}/${item.seeds}`;
+  const peers = resolving || timedOut ? "discov." : `${item.peers}/${item.seeds}`;
 
   return (
     <Box
@@ -139,9 +140,14 @@ function DiagnosticsView({ item }: { item: TorrentItem }): React.ReactNode {
       : d?.metadata === "received"
         ? "received"
         : "resolving...";
+  const known = metadataKnown(item);
+  const sourceSize = item.sourceSize !== undefined ? formatBytes(item.sourceSize) : "unknown";
+  const torrentSize = item.torrentSize !== undefined ? formatBytes(item.torrentSize) : "resolving...";
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={palette.dim} paddingX={1}>
       <Text bold color={palette.text}>Download diagnostics</Text>
+      <Text color={palette.subtext}>Size: source {sourceSize} · torrent {torrentSize} · metadata {known ? "ready" : "resolving..."} · files {item.files ?? "unknown"}</Text>
+      <Text color={palette.subtext}>Progress: {known ? formatPercent(item.progress) : "--"} · Speed: {known ? formatRate(item.downloadSpeed) : "--"} · Peers: {known ? `${item.peers} (${item.seeds} seeds)` : "discovering..."} · ETA: {known && Number.isFinite(item.timeRemaining) ? formatDuration(item.timeRemaining) : "--"}</Text>
       <Text color={palette.subtext}>Magnet valid: {d?.magnetValid ? "yes" : "no"} · Infohash valid: {d?.infohashPresent ? "yes" : "no"} · Name: {d?.displayName || item.name}</Text>
       <Text color={palette.subtext}>DHT: {d?.dht ?? "unknown"} · Socket: {d?.dhtListening ? "bound" : "not bound"} · Bootstrap: {d?.dhtBootstrapped ? "done" : "pending"} · UDP: {d?.dhtAddress ?? "–"}:{d?.dhtPort ?? "–"} ({d?.dhtFamily ?? "–"})</Text>
       <Text color={palette.subtext}>Routing: {d?.dhtRoutingTable ?? "unknown"} ({d?.dhtRoutingNodes ?? 0} nodes) · DHT queries: {d?.dhtQueries ?? 0} · responses: {d?.dhtResponses ?? 0}</Text>

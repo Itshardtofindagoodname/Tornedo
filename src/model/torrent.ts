@@ -4,10 +4,24 @@
  */
 import type { ReleaseMetadata } from "./search.js";
 
+/**
+ * Lifecycle phase of a torrent item, from the moment it is queued until it is
+ * removed. The states the UI reasons about map onto these:
+ *
+ *   SEARCH_RESULT       -> a SearchResult, not yet added to the manager
+ *   RESOLVING_METADATA  -> queued / waiting_metadata / starting
+ *   READY               -> metadata received; store ready, download not started
+ *   DOWNLOADING         -> downloading / stalled / checking
+ *   PAUSED              -> paused
+ *   COMPLETED           -> completed / stopped
+ *   SEEDING             -> seeding
+ *   FAILED              -> error
+ */
 export type TorrentStatus =
   | "queued"
   | "waiting_metadata"
   | "starting"
+  | "ready"
   | "downloading"
   | "stalled"
   | "paused"
@@ -21,6 +35,7 @@ export const TORRENT_STATUSES: readonly TorrentStatus[] = [
   "queued",
   "waiting_metadata",
   "starting",
+  "ready",
   "downloading",
   "stalled",
   "paused",
@@ -35,6 +50,7 @@ export const TORRENT_STATUSES: readonly TorrentStatus[] = [
 export const ACTIVE_DOWNLOAD_STATUSES: ReadonlySet<TorrentStatus> = new Set([
   "waiting_metadata",
   "starting",
+  "ready",
   "downloading",
   "checking",
 ]);
@@ -43,10 +59,16 @@ export const ACTIVE_DOWNLOAD_STATUSES: ReadonlySet<TorrentStatus> = new Set([
 export const ENGINE_STATUSES: ReadonlySet<TorrentStatus> = new Set([
   "waiting_metadata",
   "starting",
+  "ready",
   "downloading",
   "checking",
   "seeding",
 ]);
+
+/** True once torrent metadata (name/total/files) is actually known. */
+export function metadataKnown(item: { torrentSize?: number; files?: number | null; status: TorrentStatus }): boolean {
+  return item.torrentSize !== undefined || item.files !== null || item.status === "ready";
+}
 
 /** Live discovery and metadata-exchange telemetry for the current engine session. */
 export interface TorrentDiagnostics {
@@ -137,7 +159,15 @@ export interface TorrentItem {
   progress: number;
   downloaded: number;
   uploaded: number;
+  /**
+   * Effective size in bytes. Equals torrentSize once metadata arrives,
+   * otherwise the source-reported size (sourceSize), otherwise unknown (0).
+   */
   size: number;
+  /** Size in bytes reported by the search source (may be known before metadata). */
+  sourceSize?: number;
+  /** Size in bytes from the torrent's own metadata (unknown until metadata arrives). */
+  torrentSize?: number;
   downloadSpeed: number;
   uploadSpeed: number;
   peers: number;

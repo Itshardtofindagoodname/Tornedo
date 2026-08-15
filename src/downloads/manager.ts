@@ -125,6 +125,7 @@ private activeCount(): number {
         it.status === "downloading" ||
         it.status === "starting" ||
         it.status === "waiting_metadata" ||
+        it.status === "ready" ||
         it.status === "stalled" ||
         it.status === "checking"
       )
@@ -157,6 +158,7 @@ switch (it.status) {
         case "downloading":
         case "starting":
         case "waiting_metadata":
+        case "ready":
         case "stalled":
         case "checking":
           out.active++;
@@ -200,7 +202,7 @@ switch (it.status) {
       return existing;
     }
 
-    const item: TorrentItem = {
+const item: TorrentItem = {
       id,
       infohash,
       magnet: input.magnet || parsed?.magnet || buildMagnet(infohash, input.name),
@@ -213,7 +215,12 @@ switch (it.status) {
       progress: 0,
       downloaded: 0,
       uploaded: 0,
-      size: input.size ?? 0,
+      // The source-reported size is a hint from the search result; the torrent
+      // metadata size (torrentSize) arrives later. Never overwrite a known
+      // source size with a fake zero — an unknown size stays unknown.
+      sourceSize: input.size && input.size > 0 ? input.size : undefined,
+      torrentSize: undefined,
+      size: input.size && input.size > 0 ? input.size : 0,
       downloadSpeed: 0,
       uploadSpeed: 0,
       peers: 0,
@@ -287,15 +294,22 @@ switch (it.status) {
 
   private handlersFor(id: string): TorrentClientHandlers {
     return {
-      onMetadata: (_id, meta) => {
+onMetadata: (_id, meta) => {
         const it = this.items.get(id);
         if (!it) return;
         if (meta.name) it.name = meta.name;
-        if (meta.total) it.size = meta.total;
+        if (meta.total > 0) {
+          it.torrentSize = meta.total;
+          it.size = meta.total;
+        }
         it.files = meta.files;
         if (meta.torrentFile) this.store.saveCache(id, meta.torrentFile);
         it.diagnostics = { ...it.diagnostics!, metadata: "received", nextRetry: null, connection: "downloading", lastEvent: "torrent metadata received" };
-        if (it.status === "starting" || it.status === "waiting_metadata") this.setStatus(it, "downloading");
+        // Metadata (and the store) are ready: the item is READY, not yet
+        // DOWNLOADING. The poller promotes it once bytes actually flow.
+        if (it.status === "starting" || it.status === "waiting_metadata" || it.status === "queued") {
+          this.setStatus(it, "ready");
+        }
         this.markDirty(id);
       },
       onDone: (_id) => {
@@ -307,7 +321,7 @@ switch (it.status) {
           this.startedAt.delete(id);
           return;
         }
-if (it.status === "downloading" || it.status === "starting" || it.status === "waiting_metadata" || it.status === "stalled" || it.status === "checking") {
+if (it.status === "downloading" || it.status === "starting" || it.status === "waiting_metadata" || it.status === "ready" || it.status === "stalled" || it.status === "checking") {
           this.completeItem(it);
         }
       },
@@ -404,7 +418,7 @@ if (it.status === "downloading" || it.status === "starting" || it.status === "wa
       this.pauseSeeding(id);
       return;
     }
-if (it.status !== "downloading" && it.status !== "starting" && it.status !== "waiting_metadata" && it.status !== "stalled" && it.status !== "queued") return;
+if (it.status !== "downloading" && it.status !== "starting" && it.status !== "waiting_metadata" && it.status !== "ready" && it.status !== "stalled" && it.status !== "queued") return;
     const was = it.status;
     this.client.remove(id);
     it.status = "paused";
@@ -595,6 +609,7 @@ switch (it.status) {
         case "downloading":
         case "starting":
         case "waiting_metadata":
+        case "ready":
         case "stalled":
         case "checking":
           if (active < max) {
@@ -655,6 +670,7 @@ if (it.status === "seeding") {
         it.status === "downloading" ||
         it.status === "starting" ||
         it.status === "waiting_metadata" ||
+        it.status === "ready" ||
         it.status === "stalled" ||
         it.status === "checking"
       ) {
@@ -668,7 +684,9 @@ private tickActive(it: TorrentItem, now: number): void {
     if (it.status === "starting" || it.status === "waiting_metadata") {
       const started = this.startedAt.get(it.id) ?? it.startedAt ?? now;
       if (s) {
-        if (s.ready || s.total > 0 || s.progress > 0) this.setStatus(it, "downloading");
+        // Metadata/store are ready: promote RESOLVING_METADATA -> READY. Actual
+        // byte transfer (below) promotes READY -> DOWNLOADING.
+        if (s.ready || s.total > 0 || s.progress > 0) this.setStatus(it, "ready");
       }
       const retryAt = it.diagnostics?.nextRetry ?? started + METADATA_RETRY_BASE_MS;
       if (now >= retryAt) {
@@ -690,7 +708,10 @@ private tickActive(it: TorrentItem, now: number): void {
     it.progress = Math.min(1, s.progress || 0);
     it.downloaded = s.downloaded;
     it.uploaded = s.uploaded;
-    if (s.total) it.size = s.total;
+    if (s.total) {
+      it.torrentSize = s.total;
+      it.size = s.total;
+    }
     it.downloadSpeed = s.downloadSpeed;
     it.uploadSpeed = s.uploadSpeed;
     it.peers = s.peers;
@@ -699,6 +720,11 @@ private tickActive(it: TorrentItem, now: number): void {
     if (s.name && !it.name) it.name = s.name;
     it.lastUpdated = now;
     this.markDirty(it.id);
+
+    // READY -> DOWNLOADING: metadata known and the first bytes/peers arrive.
+    if (it.status === "ready" && (s.progress > 0 || s.downloadSpeed > 0)) {
+      this.setStatus(it, "downloading");
+    }
 
     // STALLED detection: metadata is known but discovery/progress has dried up.
     // Any peer or transfer activity immediately reverts a stalled item to
@@ -823,7 +849,14 @@ private tickActive(it: TorrentItem, now: number): void {
   persistSync(): void {
     this.flushPersist();
     for (const item of this.items.values()) {
-      if (item.status === "downloading" || item.status === "starting" || item.status === "checking") {
+      if (
+        item.status === "downloading" ||
+        item.status === "starting" ||
+        item.status === "waiting_metadata" ||
+        item.status === "ready" ||
+        item.status === "stalled" ||
+        item.status === "checking"
+      ) {
         item.downloadSpeed = 0;
         item.uploadSpeed = 0;
         item.timeRemaining = Infinity;

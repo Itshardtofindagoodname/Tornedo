@@ -109,6 +109,19 @@ export const MIGRATIONS: readonly Migration[] = [
       );
     },
   },
+  {
+    version: 5,
+    name: "separate source-reported and torrent-metadata sizes",
+    up(db) {
+      // Distinguish the size reported by the search source (known at add time)
+      // from the size reported by the torrent's own metadata (known only after
+      // metadata resolution). NULL means "not known yet" — never a fake zero.
+      db.exec(
+        `ALTER TABLE torrents ADD COLUMN source_size INTEGER;
+         ALTER TABLE torrents ADD COLUMN torrent_size INTEGER;`,
+      );
+    },
+  },
 ];
 
 export function latestSchemaVersion(): number {

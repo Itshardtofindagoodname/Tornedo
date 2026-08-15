@@ -36,9 +36,11 @@ const MAGNET_SITE = {
 };
 
 describe("htmlMagnetMusicSource failure semantics", () => {
-  it("surfaces a parse error when the listing changed but still carries magnets", async () => {
+  it("resolves results directly from listing magnets even when detail links changed", async () => {
     stubFetch(() => response(`<a href="magnet:?xt=urn:btih:${HASH}">get</a>`));
-    await expect(htmlMagnetMusicSource(MAGNET_SITE).search("album", ctx())).rejects.toBeInstanceOf(ParseError);
+    const results = await htmlMagnetMusicSource(MAGNET_SITE).search("album", ctx());
+    expect(results).toHaveLength(1);
+    expect(results[0]!.infohash).toBe(HASH);
   });
 
   it("returns an empty list for a genuinely empty listing (no structure signal)", async () => {

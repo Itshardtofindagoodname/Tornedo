@@ -23,26 +23,38 @@ interface Row {
   sizeBytes: number;
 }
 
-function parseRows(html: string): Row[] {
+export function parseRows(html: string): Row[] {
   const start = html.indexOf("table-list");
   if (start < 0) return [];
   const out: Row[] = [];
   for (const tr of html.slice(start).split(/<tr[\s>]/i).slice(1)) {
-    const link = tr.match(/href="(\/torrent\/[^"]+)"[^>]*>([^<]+)<\/a>/i);
-    if (!link) continue;
-    const size = tr.match(/class="coll-4 size[^"]*">\s*([\d.]+\s*[KMGT]i?B)/i)?.[1] ?? "";
+    // The first /torrent/ anchor is usually the row icon; iterate and take the
+    // first one that carries a real title.
+    let name: string | undefined;
+    let path: string | undefined;
+    for (const link of tr.matchAll(/<a\b[^>]*href\s*=\s*["'](\/torrent\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+      const candidate = unescapeEntities(link[2]!.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+      if (!candidate) continue;
+      name = candidate;
+      path = link[1]!;
+      break;
+    }
+    if (!name || !path) continue;
+    const sizeCell = tr.match(/class\s*=\s*"(?=[^"]*\bsize\b)[^"]*"\s*>\s*([\d.]+\s*[KMGT]i?B)/i)?.[1];
+    const seedsCell = tr.match(/class\s*=\s*"(?=[^"]*\bseeds\b)[^"]*"\s*>\s*([\d,]+)/i)?.[1];
+    const leechesCell = tr.match(/class\s*=\s*"(?=[^"]*\bleeches\b)[^"]*"\s*>\s*([\d,]+)/i)?.[1];
     out.push({
-      name: unescapeEntities(link[2]!.trim()),
-      path: link[1]!,
-      seeders: Number(tr.match(/class="coll-2 seeds[^"]*">\s*(\d+)/i)?.[1] ?? 0),
-      leechers: Number(tr.match(/class="coll-3 leeches[^"]*">\s*(\d+)/i)?.[1] ?? 0),
-      sizeBytes: parseSizeSafe(size),
+      name,
+      path,
+      seeders: Number((seedsCell ?? "").replace(/,/g, "")),
+      leechers: Number((leechesCell ?? "").replace(/,/g, "")),
+      sizeBytes: parseSizeSafe(sizeCell ?? ""),
     });
   }
   return out;
 }
 
-function parseSizeSafe(raw: string): number {
+export function parseSizeSafe(raw: string): number {
   const s = raw.trim().toLowerCase();
   const m = s.match(/^([\d.]+)\s*([kmgt]i?b)$/);
   if (!m) return 0;
@@ -142,9 +154,12 @@ async function search(
   if (!base) throw lastError instanceof Error ? lastError : new HttpError(0, "1337x unreachable");
 
   const all = parseRows(html);
-  // The listing answered but the table structure we scrape is gone. Report a
-  // parse failure rather than silently claiming "zero results".
-  if (all.length === 0 && !/table-list/.test(html)) {
+  // The listing answered but we cannot read it. Fail loudly instead of silently
+  // claiming "zero results" whenever either (a) the table container we scrape is
+  // gone, or (b) the container exists but the page still links to /torrent/
+  // detail pages we failed to parse. A genuinely empty result page has a table
+  // with no detail links, which is a legitimate empty set.
+  if (all.length === 0 && (!/table-list/.test(html) || /href\s*=\s*["']\/torrent\//i.test(html))) {
     throw new ParseError(`${sourceId}: listing structure unrecognized`);
   }
   const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);

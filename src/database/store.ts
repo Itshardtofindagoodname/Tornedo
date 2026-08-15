@@ -19,6 +19,8 @@ export interface TorrentRow {
   downloaded: number;
   uploaded: number;
   size: number;
+  source_size: number | null;
+  torrent_size: number | null;
   download_speed: number;
   upload_speed: number;
   peers: number;
@@ -56,6 +58,8 @@ export function rowToItem(row: TorrentRow): TorrentItem {
     downloaded: row.downloaded,
     uploaded: row.uploaded,
     size: row.size,
+    sourceSize: row.source_size ?? undefined,
+    torrentSize: row.torrent_size ?? undefined,
     downloadSpeed: row.download_speed,
     uploadSpeed: row.upload_speed,
     peers: row.peers,
@@ -78,6 +82,8 @@ export interface TorrentPatch {
   downloaded?: number;
   uploaded?: number;
   size?: number;
+  sourceSize?: number | null;
+  torrentSize?: number | null;
   downloadSpeed?: number;
   uploadSpeed?: number;
   peers?: number;
@@ -134,12 +140,14 @@ export class TorrentStore {
       .prepare(
         `INSERT INTO torrents (
           id, infohash, magnet, name, category, source_id, metadata, destination,
-          status, progress, downloaded, uploaded, size, download_speed, upload_speed,
+          status, progress, downloaded, uploaded, size, source_size, torrent_size,
+          download_speed, upload_speed,
           peers, seeds, time_remaining, priority, seed_enabled, files, queued_at,
           started_at, completed_at, last_updated, error
         ) VALUES (
           @id, @infohash, @magnet, @name, @category, @sourceId, @metadata, @destination,
-          @status, @progress, @downloaded, @uploaded, @size, @downloadSpeed, @uploadSpeed,
+          @status, @progress, @downloaded, @uploaded, @size, @sourceSize, @torrentSize,
+          @downloadSpeed, @uploadSpeed,
           @peers, @seeds, @timeRemaining, @priority, @seedEnabled, @files, @queuedAt,
           @startedAt, @completedAt, @lastUpdated, @error
         )
@@ -156,6 +164,8 @@ export class TorrentStore {
           downloaded = excluded.downloaded,
           uploaded = excluded.uploaded,
           size = excluded.size,
+          source_size = excluded.source_size,
+          torrent_size = excluded.torrent_size,
           download_speed = excluded.download_speed,
           upload_speed = excluded.upload_speed,
           peers = excluded.peers,
@@ -188,6 +198,8 @@ export class TorrentStore {
       downloaded: item.downloaded,
       uploaded: item.uploaded,
       size: item.size,
+      sourceSize: item.sourceSize ?? null,
+      torrentSize: item.torrentSize ?? null,
       downloadSpeed: item.downloadSpeed,
       uploadSpeed: item.uploadSpeed,
       peers: item.peers,
@@ -213,6 +225,8 @@ export class TorrentStore {
     if (patch.downloaded !== undefined) merged.downloaded = patch.downloaded;
     if (patch.uploaded !== undefined) merged.uploaded = patch.uploaded;
     if (patch.size !== undefined) merged.size = patch.size;
+    if (patch.sourceSize !== undefined) merged.sourceSize = patch.sourceSize ?? undefined;
+    if (patch.torrentSize !== undefined) merged.torrentSize = patch.torrentSize ?? undefined;
     if (patch.downloadSpeed !== undefined) merged.downloadSpeed = patch.downloadSpeed;
     if (patch.uploadSpeed !== undefined) merged.uploadSpeed = patch.uploadSpeed;
     if (patch.peers !== undefined) merged.peers = patch.peers;

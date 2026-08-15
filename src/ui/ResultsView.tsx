@@ -5,8 +5,9 @@
 import { useMemo, useRef } from "react";
 import { Box, Text, useBoxMetrics, type DOMElement } from "ink";
 import type { Application } from "../app/application.js";
-import type { SearchSession, SourceReport } from "../app/search-service.js";
+import type { SearchSession, SourceReport, SourceHealth } from "../app/search-service.js";
 import type { Release } from "../model/search.js";
+import type { SourceErrorKind } from "../model/source.js";
 import { formatAudio } from "../media/audio.js";
 import { formatBytes } from "../utils/bytes.js";
 import { truncate } from "../utils/duration.js";
@@ -101,6 +102,37 @@ export function ResultsView({
 
 // --- pieces ----------------------------------------------------------------
 
+const HEALTH_GLYPH: Record<SourceHealth, string> = {
+  healthy: "●",
+  working: "◐",
+  idle: "◌",
+  degraded: "⚠",
+  failed: "✕",
+  unsupported: "—",
+};
+
+const HEALTH_COLOR: Record<SourceHealth, string> = {
+  healthy: sourceColor("x"),
+  working: palette.dim,
+  idle: palette.dim,
+  degraded: palette.yellow,
+  failed: palette.red,
+  unsupported: palette.dim,
+};
+
+const FAILURE_LABEL: Record<SourceErrorKind, string> = {
+  timeout: "timeout",
+  http: "HTTP failure",
+  parse: "parser failure",
+  unavailable: "network failure",
+  cancelled: "aborted",
+  unsupported: "unsupported",
+};
+
+function healthOf(r: SourceReport): SourceHealth {
+  return r.health ?? (r.status === "ok" ? (r.results > 0 ? "healthy" : "working") : "failed");
+}
+
 function SourceStrip({
   app,
   reports,
@@ -114,25 +146,21 @@ function SourceStrip({
   );
   if (!reports || reports.size === 0) return null;
   const entries = [...reports.entries()];
-  const kindLabel: Record<NonNullable<SourceReport["failure"]>["kind"], string> = {
-    timeout: "timeout",
-    http: "HTTP",
-    parse: "parse",
-    unavailable: "down",
-    cancelled: "aborted",
-  };
   return (
     <Box height={1} paddingLeft={1} gap={2}>
       {entries.map(([id, r]) => {
         const name = sourceNames.get(id) ?? id;
-        const color =
-          r.status === "ok" ? sourceColor(id) : r.status === "error" ? palette.red : palette.dim;
+        const health = healthOf(r);
+        const glyph = HEALTH_GLYPH[health];
+        const color = HEALTH_COLOR[health];
         const text =
           r.status === "ok"
-            ? `${name}:${r.results}`
-            : r.status === "error"
-              ? `${name}:✗${r.failure ? ` ${kindLabel[r.failure.kind]}` : ""}`
-              : `${name}:…`;
+            ? r.results > 0
+              ? `${glyph} ${name}:${r.results}`
+              : `${glyph} ${name}:0`
+            : r.status === "pending"
+              ? `${glyph} ${name}:…`
+              : `${glyph} ${name}: ${r.failure ? FAILURE_LABEL[r.failure.kind] : "error"}`;
         return (
           <Text key={id} color={color} wrap="truncate">
             {text}

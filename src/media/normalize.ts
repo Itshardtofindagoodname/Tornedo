@@ -47,6 +47,7 @@ export function normalizeResult(result: SearchResult): NormalizedResult {
     torrentUrls: result.torrentUrl ? [result.torrentUrl] : [],
     sources: [result.sourceId],
     added: result.added,
+    sourceMetadata: result.sourceMetadata,
   };
 }
 

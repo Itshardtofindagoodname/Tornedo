@@ -22,7 +22,22 @@ export interface SearchContext {
 }
 
 /** Failure modes the engine surfaces per source. */
-export type SourceErrorKind = "timeout" | "http" | "parse" | "unavailable" | "cancelled";
+export type SourceErrorKind =
+  | "timeout"
+  | "http"
+  | "parse"
+  | "unavailable"
+  | "cancelled"
+  | "unsupported";
+
+export const SOURCE_ERROR_KINDS: readonly SourceErrorKind[] = [
+  "timeout",
+  "http",
+  "parse",
+  "unavailable",
+  "cancelled",
+  "unsupported",
+];
 
 export interface SourceFailure {
   kind: SourceErrorKind;
@@ -73,6 +88,8 @@ export interface SearchRequest {
   query: string;
   /** Override the globally enabled set; defaults to all enabled sources. */
   sourceIds?: string[];
+  /** Restrict to sources that can produce this media category (e.g. "Music"). */
+  category?: MediaCategory;
   /** Cancel the whole search. */
   signal?: AbortSignal;
 }

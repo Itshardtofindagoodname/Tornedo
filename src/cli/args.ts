@@ -31,6 +31,8 @@ export interface CliArgs {
   dir: string | null;
   seed: boolean | null;
   priority: number | null;
+  category: string | null;
+  check: boolean;
 }
 
 export function defaultArgs(): CliArgs {
@@ -47,6 +49,8 @@ export function defaultArgs(): CliArgs {
     dir: null,
     seed: null,
     priority: null,
+    category: null,
+    check: false,
   };
 }
 
@@ -126,6 +130,12 @@ export function parseArgs(argv: readonly string[]): CliArgs {
           break;
         case "priority":
           args.priority = numberFlag(next(), "--priority");
+          break;
+        case "category":
+          args.category = next();
+          break;
+        case "check":
+          args.check = true;
           break;
         default:
           throw new CliArgError(`Unknown flag --${name}`);

@@ -3,7 +3,7 @@
  * settle, raw results are appended and the results pipeline (normalize, dedupe,
  * rank, group) rebuilds incrementally. Consumers subscribe to changes.
  */
-import type { Release, ReleaseGroup, SearchResult } from "../model/search.js";
+import type { MediaCategory, Release, ReleaseGroup, SearchResult } from "../model/search.js";
 import type { SearchEmitter, SearchSummary, SourceFailure } from "../model/source.js";
 import type { RankingConfig } from "../config/config.js";
 import type { SearchEngine } from "../search/engine.js";
@@ -21,15 +21,21 @@ export interface SearchFailure {
   failure: SourceFailure;
 }
 
+/** Health a source settles into, for the status strip / diagnostics. */
+export type SourceHealth = "healthy" | "working" | "idle" | "degraded" | "failed" | "unsupported";
+
 export interface SourceReport {
   status: "pending" | "ok" | "error";
   results: number;
   failure?: SourceFailure;
+  /** Derived health shown in the UI status strip. */
+  health: SourceHealth;
 }
 
 export class SearchSession {
   readonly query: string;
   readonly sourceIds?: string[];
+  readonly category?: MediaCategory;
 
   private rawResults: SearchResult[] = [];
   private releaseList: Release[] = [];
@@ -44,10 +50,11 @@ export class SearchSession {
   private readonly listeners = new Set<(session: SearchSession) => void>();
   private readonly service: SearchServiceOptions;
 
-  constructor(service: SearchServiceOptions, query: string, sourceIds?: string[]) {
+  constructor(service: SearchServiceOptions, query: string, sourceIds?: string[], category?: MediaCategory) {
     this.service = service;
     this.query = query;
     this.sourceIds = sourceIds;
+    this.category = category;
   }
 
   start(): void {
@@ -56,13 +63,13 @@ export class SearchSession {
     const emitter: SearchEmitter = {
       onSourceResults: (sourceId, results) => {
         this.rawResults.push(...results);
-        this.sourceStats.set(sourceId, { status: "ok", results: results.length });
+        this.sourceStats.set(sourceId, okReport(results.length));
         this.rebuild();
         this.emit();
       },
       onSourceError: (sourceId, failure) => {
         this.failures.push({ sourceId, failure });
-        this.sourceStats.set(sourceId, { status: "error", results: 0, failure });
+        this.sourceStats.set(sourceId, errorReport(failure));
         this.emit();
       },
       onComplete: (summary) => {
@@ -85,7 +92,10 @@ export class SearchSession {
     };
 
     void this.service.engine
-      .search({ query: this.query, sourceIds: this.sourceIds, signal: this.abort.signal }, emitter)
+      .search(
+        { query: this.query, sourceIds: this.sourceIds, category: this.category, signal: this.abort.signal },
+        emitter,
+      )
       .then(() => finish())
       .catch((err: unknown) => finish(err));
   }
@@ -177,7 +187,35 @@ export class SearchService {
     this.opts = opts;
   }
 
-  createSession(query: string, sourceIds?: string[]): SearchSession {
-    return new SearchSession(this.opts, query, sourceIds);
+  createSession(query: string, sourceIds?: string[], category?: MediaCategory): SearchSession {
+    return new SearchSession(this.opts, query, sourceIds, category);
   }
+}
+
+function okReport(results: number): SourceReport {
+  return {
+    status: "ok",
+    results,
+    health: results > 0 ? "healthy" : "working",
+  };
+}
+
+function errorReport(failure: SourceFailure): SourceReport {
+  let health: SourceHealth;
+  switch (failure.kind) {
+    case "unsupported":
+      health = "unsupported";
+      break;
+    case "timeout":
+    case "parse":
+      health = "degraded";
+      break;
+    case "cancelled":
+      health = "idle";
+      break;
+    default:
+      health = "failed";
+      break;
+  }
+  return { status: "error", results: 0, failure, health };
 }

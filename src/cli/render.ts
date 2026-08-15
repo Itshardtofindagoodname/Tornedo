@@ -44,6 +44,7 @@ export interface ReleaseJson {
   magnet: string;
   score: number;
   added: number | null;
+  sourceMetadata: Record<string, unknown> | null;
 }
 
 export function releaseToJson(r: Release): ReleaseJson {
@@ -72,6 +73,7 @@ export function releaseToJson(r: Release): ReleaseJson {
     magnet: r.magnet,
     score: Math.round(r.score * 1000) / 1000,
     added: r.added ?? null,
+    sourceMetadata: r.sourceMetadata ?? null,
   };
 }
 
@@ -99,6 +101,8 @@ export function torrentToJson(it: TorrentItem): Record<string, unknown> {
     progress: Math.round(it.progress * 1000) / 1000,
     downloaded: it.downloaded,
     size: it.size,
+    sourceSize: it.sourceSize ?? null,
+    torrentSize: it.torrentSize ?? null,
     downloadSpeed: it.downloadSpeed,
     uploadSpeed: it.uploadSpeed,
     uploaded: it.uploaded,
@@ -148,11 +152,19 @@ export function renderSearchTable(releases: readonly Release[], opts: TableOptio
 
 export function renderTorrentRow(it: TorrentItem): string {
   const status = it.status.toUpperCase().padEnd(11);
-  const pct = `${Math.round(it.progress * 100)}%`.padStart(4);
-  const size = formatBytes(it.size);
-  const speed = it.downloadSpeed > 0 ? `${formatBytes(it.downloadSpeed)}/s` : "-";
-  const eta = Number.isFinite(it.timeRemaining) ? formatDuration(it.timeRemaining) : "--";
-  const peers = `${it.peers}/${it.seeds}`;
+  const resolving = it.torrentSize === undefined && it.files === null && it.status !== "ready";
+  const timedOut = it.diagnostics?.metadata === "timeout";
+  const pct = resolving || timedOut ? "--" : `${Math.round(it.progress * 100)}%`.padStart(4);
+  const size = timedOut
+    ? "TIMEOUT"
+    : resolving
+      ? it.sourceSize
+        ? `src ${formatBytes(it.sourceSize)}`
+        : "resolving"
+      : formatBytes(it.size);
+  const speed = resolving || timedOut ? "--" : it.downloadSpeed > 0 ? `${formatBytes(it.downloadSpeed)}/s` : "-";
+  const eta = resolving || timedOut ? "--" : Number.isFinite(it.timeRemaining) ? formatDuration(it.timeRemaining) : "--";
+  const peers = resolving || timedOut ? "discov" : `${it.peers}/${it.seeds}`;
   const name = truncate(it.name, 60);
   return `${status} ${pct} ${size.padStart(10)} ${speed.padStart(10)} ${eta.padStart(8)} ${peers.padStart(8)} ${name}`;
 }

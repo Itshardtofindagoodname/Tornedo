@@ -41,6 +41,36 @@ describe("normalizeConfig", () => {
     expect(cfg.keybindings.down).toEqual(["down", "j"]);
     expect((cfg.keybindings as Record<string, unknown>).bogus).toBeUndefined();
   });
+
+  it("normalizes Torznab providers and trims trailing slashes", () => {
+    const cfg = normalizeConfig({
+      torznabProviders: [
+        { baseUrl: "http://localhost:9117/api/v1/", apiKey: "k", categories: ["Music"], timeoutMs: 5000 },
+        { baseUrl: "", apiKey: 5 },
+        "garbage",
+      ],
+    });
+    expect(cfg.torznabProviders).toHaveLength(1);
+    const p = cfg.torznabProviders[0]!;
+    expect(p.baseUrl).toBe("http://localhost:9117/api/v1");
+    expect(p.apiKey).toBe("k");
+    expect(p.enabled).toBe(true);
+    expect(p.categories).toEqual(["Music"]);
+    expect(p.timeoutMs).toBe(5000);
+  });
+
+  it("normalizes internetArchive settings with clamping", () => {
+    const cfg = normalizeConfig({ internetArchive: { enabled: true, timeoutMs: 2000, maxResults: 9999 } });
+    expect(cfg.internetArchive.enabled).toBe(true);
+    expect(cfg.internetArchive.timeoutMs).toBe(2000);
+    expect(cfg.internetArchive.maxResults).toBe(200);
+  });
+
+  it("defaults internetArchive and torznabProviders to safe values", () => {
+    const cfg = normalizeConfig({});
+    expect(cfg.internetArchive).toEqual({ enabled: false, timeoutMs: 15_000, maxResults: 30 });
+    expect(cfg.torznabProviders).toEqual([]);
+  });
 });
 
 describe("load/saveConfig", () => {

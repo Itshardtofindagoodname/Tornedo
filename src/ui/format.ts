@@ -29,6 +29,7 @@ const STATUS_COLORS: Record<TorrentStatus, string> = {
   queued: palette.dim,
   waiting_metadata: palette.yellow,
   starting: palette.yellow,
+  ready: palette.green,
   downloading: palette.cyan,
   stalled: palette.dim,
   checking: palette.yellow,
@@ -50,12 +51,14 @@ export function statusGlyph(status: TorrentStatus): string {
       return "↓";
     case "seeding":
       return "↑";
-    case "queued":
+case "queued":
       return "·";
     case "starting":
     case "waiting_metadata":
     case "checking":
       return "~";
+    case "ready":
+      return "◎";
     case "paused":
       return "‖";
     case "stalled":

@@ -21,6 +21,7 @@ export function emptyRelease(r: NormalizedResult): Release {
     sources: [...r.sources],
     added: r.added,
     score: 0,
+    sourceMetadata: r.sourceMetadata,
   };
 }
 
@@ -53,6 +54,7 @@ export function mergeRelease(base: Release, r: NormalizedResult): Release {
     sources: dedupeStrings([...base.sources, ...r.sources]),
     added,
     score: base.score,
+    sourceMetadata: base.sourceMetadata ?? r.sourceMetadata,
   };
 }
 

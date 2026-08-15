@@ -35,6 +35,19 @@ export class ParseError extends Error {
   }
 }
 
+/**
+ * Thrown when a source is healthy but does not support the requested category
+ * or query type (e.g. a Torznab endpoint with no `music` capability). The
+ * engine classifies this as `unsupported` — a real, actionable signal, never
+ * an empty result set.
+ */
+export class UnsupportedError extends Error {
+  constructor(message = "source does not support this query type") {
+    super(message);
+    this.name = "UnsupportedError";
+  }
+}
+
 export interface FetchOptions {
   headers?: Record<string, string>;
   signal?: AbortSignal;

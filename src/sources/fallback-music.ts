@@ -6,7 +6,9 @@ export const limeTorrentsMusic = htmlMagnetMusicSource({
   name: "LimeTorrents",
   homepage: "https://www.limetorrents.lol",
   searchUrl: (query) => `https://www.limetorrents.lol/search/all/${encodeURIComponent(query).replace(/%20/g, "-")}/`,
-  detailPath: /^\/[^/?#]+\.html(?:[?#].*)?$/i,
+  // Require the detail route (under /torrent/) so nav/footer links like
+  // /faq.html or /about.html never become magnet-resolution candidates.
+  detailPath: /^\/torrent\/[^/?#]+\.html(?:[?#].*)?$/i,
 });
 
 export const torrentGalaxyMusic = htmlMagnetMusicSource({
