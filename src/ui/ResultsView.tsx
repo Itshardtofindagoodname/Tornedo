@@ -1,6 +1,8 @@
 /**
- * Results view: query summary, live source status strip, scrollable release
- * list, and an optional details panel. Presentational — App owns all input.
+ * Results view: query summary, live source status strip, and a scrollable
+ * release list with strong typographic hierarchy. Each result spans two lines:
+ * the title (focus state via accent marker + bold) and a muted metadata line.
+ * Presentational — App owns all input.
  */
 import { useMemo, useRef } from "react";
 import { Box, Text, useBoxMetrics, type DOMElement } from "ink";
@@ -12,9 +14,8 @@ import type { ReleaseFilter, SortSpec } from "../results/filter.js";
 import { formatAudio } from "../media/audio.js";
 import { describeFilter, sortLabel } from "../results/filter.js";
 import { formatBytes } from "../utils/bytes.js";
-import { truncate } from "../utils/duration.js";
-import { categoryColor, categoryTag, sourceColor } from "./format.js";
-import { Spinner } from "./components.js";
+import { categoryColor, categoryTag, sourceGlyph, sourceHealthColor } from "./format.js";
+import { Spinner, EmptyState } from "./components.js";
 import { palette } from "./theme.js";
 import { scrollWindow } from "./text.js";
 
@@ -22,12 +23,12 @@ export interface ResultsViewProps {
   app: Application;
   session: SearchSession | null;
   selected: number;
-  details: boolean;
   filter: string;
   sortSpec: SortSpec;
   categoryScope: MediaCategory | null;
   releaseFilter: ReleaseFilter;
   tick: number;
+  wide: boolean;
 }
 
 export function filteredReleases(
@@ -76,12 +77,12 @@ export function ResultsView({
   app,
   session,
   selected,
-  details,
   filter,
   sortSpec,
   categoryScope,
   releaseFilter,
   tick,
+  wide,
 }: ResultsViewProps): React.ReactNode {
   const releases = filteredReleases(session, filter, releaseFilter, categoryScope);
   const len = releases.length;
@@ -89,8 +90,8 @@ export function ResultsView({
 
   const listRef = useRef<DOMElement | null>(null);
   const metrics = useBoxMetrics(listRef);
-  const rows = Math.max(1, metrics.height);
-  const { start, count } = scrollWindow(sel, rows, len);
+  const rowSlots = Math.max(1, Math.floor(metrics.height / 2));
+  const { start, count } = scrollWindow(sel, rowSlots, len);
 
   const summary = session?.summary();
   const done = session?.isDone();
@@ -101,6 +102,11 @@ export function ResultsView({
   const sortIsDefault = sortSpec.by === "score" && sortSpec.dir === "desc";
   const hasFilterChips = categoryScope !== null || filter.length > 0 || filterChips.length > 0 || !sortIsDefault;
 
+  const sourceNames = useMemo(
+    () => new Map(app.sources.map((s) => [s.id, s.name])),
+    [app],
+  );
+
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={1}>
       <Box height={1} paddingLeft={1}>
@@ -110,7 +116,7 @@ export function ResultsView({
         <Text dimColor>  ·  {len} unique results</Text>
         {done ? (
           <Text dimColor>
-            {" "}· {summary?.sourcesSucceeded ?? 0} sources ok in {summary?.elapsedMs ?? 0}ms
+            {" "}· {summary?.sourcesSucceeded ?? 0} sources ok in {(summary?.elapsedMs ?? 0) / 1000}s
           </Text>
         ) : (
           <Text>
@@ -123,7 +129,7 @@ export function ResultsView({
 
       {inferred ? (
         <Box height={1} paddingLeft={1}>
-          <Text color={palette.magenta} bold>⚡</Text>
+          <Text color={palette.accent} bold>⚡</Text>
           <Text dimColor> understood:</Text>
           <Text color={palette.subtext}> {describeInference(inferred)}</Text>
           {inferred.mediaType ? (
@@ -140,7 +146,7 @@ export function ResultsView({
             <Chip color={categoryColor(categoryScope)} label={`cat ${categoryTag(categoryScope).trim()}`} />
           ) : null}
           <Chip color={palette.accent} label={`sort ${sortLabel(sortSpec)}`} />
-          {filter ? <Chip color={palette.yellow} label={`query "${filter}"`} /> : null}
+          {filter ? <Chip color={palette.amber} label={`query "${filter}"`} /> : null}
           {filterChips.map((c) => (
             <Chip key={c} color={palette.green} label={c} />
           ))}
@@ -152,22 +158,18 @@ export function ResultsView({
 
       <Box ref={listRef} flexGrow={1} flexDirection="column" overflow="hidden">
         {len === 0 ? (
-          <Box flexGrow={1} alignItems="center" justifyContent="center">
-            <Text dimColor>{done ? "No results matched the current scope." : "Waiting for sources…"}</Text>
-          </Box>
+          done ? (
+            <EmptyState message="No results matched the current scope." hint="try a broader query, or widen the filters" />
+          ) : (
+            <EmptyState message="Waiting for sources…" hint="results stream in as each source settles" />
+          )
         ) : (
           releases.slice(start, start + count).map((r, i) => {
             const idx = start + i;
-            return <ResultRow key={r.infohash} release={r} selected={idx === sel} />;
+            return <ResultRow key={r.infohash} release={r} selected={idx === sel} sourceNames={sourceNames} wide={wide} />;
           })
         )}
       </Box>
-
-      {details && len > 0 ? (
-        <Box marginBottom={1}>
-          <ReleaseDetails release={releases[sel]!} />
-        </Box>
-      ) : null}
     </Box>
   );
 }
@@ -193,23 +195,9 @@ function describeInference(inferred: NonNullable<ReturnType<SearchSession["infer
 
 // --- pieces ----------------------------------------------------------------
 
-const HEALTH_GLYPH: Record<SourceHealth, string> = {
-  healthy: "●",
-  working: "◐",
-  idle: "◌",
-  degraded: "⚠",
-  failed: "✕",
-  unsupported: "—",
-};
-
-const HEALTH_COLOR: Record<SourceHealth, string> = {
-  healthy: sourceColor("x"),
-  working: palette.dim,
-  idle: palette.dim,
-  degraded: palette.yellow,
-  failed: palette.red,
-  unsupported: palette.dim,
-};
+function healthOf(r: SourceReport): SourceHealth {
+  return r.health ?? (r.status === "ok" ? (r.results > 0 ? "healthy" : "working") : "failed");
+}
 
 const FAILURE_LABEL: Record<SourceErrorKind, string> = {
   timeout: "timeout",
@@ -219,10 +207,6 @@ const FAILURE_LABEL: Record<SourceErrorKind, string> = {
   cancelled: "aborted",
   unsupported: "unsupported",
 };
-
-function healthOf(r: SourceReport): SourceHealth {
-  return r.health ?? (r.status === "ok" ? (r.results > 0 ? "healthy" : "working") : "failed");
-}
 
 function SourceStrip({
   app,
@@ -242,16 +226,16 @@ function SourceStrip({
       {entries.map(([id, r]) => {
         const name = sourceNames.get(id) ?? id;
         const health = healthOf(r);
-        const glyph = HEALTH_GLYPH[health];
-        const color = HEALTH_COLOR[health];
+        const glyph = sourceGlyph(health);
+        const color = sourceHealthColor(health);
         const text =
           r.status === "ok"
             ? r.results > 0
-              ? `${glyph} ${name}:${r.results}`
-              : `${glyph} ${name}:0`
+              ? `${glyph} ${name} ${r.results}`
+              : `${glyph} ${name} 0`
             : r.status === "pending"
-              ? `${glyph} ${name}:…`
-              : `${glyph} ${name}: ${r.failure ? FAILURE_LABEL[r.failure.kind] : "error"}`;
+              ? `${glyph} ${name} …`
+              : `${glyph} ${name} ${r.failure ? FAILURE_LABEL[r.failure.kind] : "error"}`;
         return (
           <Text key={id} color={color} wrap="truncate">
             {text}
@@ -262,94 +246,58 @@ function SourceStrip({
   );
 }
 
-function ResultRow({ release, selected }: { release: Release; selected: boolean }): React.ReactNode {
+function ResultRow({
+  release,
+  selected,
+  sourceNames,
+  wide,
+}: {
+  release: Release;
+  selected: boolean;
+  sourceNames: Map<string, string>;
+  wide: boolean;
+}): React.ReactNode {
   const md = release.metadata;
-  const quality = md.quality ?? "";
   const size = formatBytes(release.size);
   const seeds = release.seeders === undefined ? "–" : String(release.seeders);
-  const titleColor = selected ? palette.bg : palette.text;
-
-  return (
-    <Box
-      height={1}
-      width="100%"
-      backgroundColor={selected ? palette.accent : undefined}
-      paddingLeft={1}
-    >
-      <Box width={2}>
-        <Text color={selected ? palette.bg : palette.faint}>{selected ? "❯" : " "}</Text>
-      </Box>
-      <Box width={6}>
-        <Text color={selected ? palette.bg : categoryColor(release.category)}>
-          {categoryTag(release.category)}
-        </Text>
-      </Box>
-      <Box flexGrow={1} paddingRight={1}>
-        <Text wrap="truncate" color={titleColor}>
-          {release.title}
-        </Text>
-      </Box>
-      <Box width={8}>
-        <Text color={selected ? palette.bg : palette.dim} wrap="truncate">
-          {quality}
-        </Text>
-      </Box>
-      <Box width={11}>
-        <Text color={selected ? palette.bg : palette.subtext}>{size}</Text>
-      </Box>
-      <Box width={7}>
-        <Text color={selected ? palette.bg : palette.green}>{seeds}</Text>
-      </Box>
-      <Box width={1} />
-    </Box>
-  );
-}
-
-function ReleaseDetails({ release }: { release: Release }): React.ReactNode {
-  const md = release.metadata;
+  const peers = release.leechers === undefined ? "–" : String(release.leechers);
+  const files = release.files === undefined ? "–" : String(release.files);
+  const metaBits = [
+    size,
+    `${seeds} seeds`,
+    `${peers} peers`,
+    `${release.sources.length} source${release.sources.length === 1 ? "" : "s"}`,
+  ];
+  if (files !== "–") metaBits.push(`${files} files`);
+  const sources = release.sources.map((s) => sourceNames.get(s) ?? s).join(", ");
+  const spec = [md.quality, md.resolution, md.codec].filter(Boolean).join(" · ");
   const audio = formatAudio(md.audio);
-  const seg = [md.quality, md.resolution, md.codec, md.container, md.source, md.group, audio]
-    .filter(Boolean)
-    .join(" · ");
-  const tags: string[] = [];
-  if (md.year) tags.push(`year ${md.year}`);
-  if (md.season) tags.push(`S${String(md.season).padStart(2, "0")}`);
-  if (md.episode) tags.push(`E${String(md.episode).padStart(2, "0")}`);
-  if (md.languages?.length) tags.push(md.languages.join("/"));
-  if (md.subtitles?.length) tags.push(`subs ${md.subtitles.join("/")}`);
-  if (md.edition?.length) tags.push(md.edition.join(", "));
 
   return (
-    <Box
-      flexDirection="column"
-      borderStyle="round"
-      borderColor={palette.border}
-      paddingX={2}
-      paddingY={1}
-    >
-      <Text bold color={palette.text}>
-        {release.title}
-      </Text>
-      {seg ? (
-        <Text dimColor>
-          specs: <Text color={palette.subtext}>{seg}</Text>
+    <Box flexDirection="column" width="100%">
+      <Box height={1} width="100%" backgroundColor={selected ? palette.surfaceAlt : undefined} paddingLeft={1}>
+        <Box width={2}>
+          <Text color={selected ? palette.accent : palette.faint} bold={selected}>
+            {selected ? "›" : " "}
+          </Text>
+        </Box>
+        <Box flexGrow={1} paddingRight={1}>
+          <Text wrap="truncate" color={selected ? palette.text : palette.subtext} bold={selected}>
+            {release.title}
+          </Text>
+        </Box>
+        <Box width={8} justifyContent="flex-end" paddingRight={2}>
+          <Text color={selected ? palette.accent : palette.dim} wrap="truncate">
+            {spec}
+          </Text>
+        </Box>
+      </Box>
+      <Box height={1} width="100%" paddingLeft={4}>
+        <Text color={selected ? palette.dim : palette.faint} wrap="truncate">
+          {metaBits.join("  ·  ")}
+          {wide && sources.length > 0 ? <Text dimColor>  —  {sources}</Text> : null}
         </Text>
-      ) : null}
-      {tags.length > 0 ? (
-        <Text dimColor>
-          tags: <Text color={palette.subtext}>{truncate(tags.join("  "), 120)}</Text>
-        </Text>
-      ) : null}
-      <Text dimColor>
-        sources: <Text color={palette.subtext}>{truncate(release.sources.join(", "), 120)}</Text>
-      </Text>
-      <Text dimColor>
-        size: <Text color={palette.subtext}>{formatBytes(release.size)}</Text>
-        <Text dimColor>
-          {"  "}seeders {release.seeders ?? "-"} · leechers {release.leechers ?? "-"} · files{" "}
-          {release.files ?? "-"}
-        </Text>
-      </Text>
+      </Box>
     </Box>
   );
 }

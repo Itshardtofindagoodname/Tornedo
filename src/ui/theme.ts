@@ -1,26 +1,38 @@
 /**
- * Visual language for the terminal UI. A single dark, muted palette keeps the
- * interface calm and readable across terminal themes. All colors are truecolor
- * hex values; Ink degrades gracefully on 256-color terminals.
+ * Visual language for the terminal UI. A single very-dark, neutral palette with
+ * a warm electric yellow/orange accent (the Tornedo lightning identity). The
+ * accent is used sparingly — selection, the wordmark, focused controls and
+ * progress emphasis. Most of the interface stays in soft grays.
+ *
+ * All colors are truecolor hex values; Ink degrades gracefully on 256-color
+ * terminals. The same information is always carried by glyphs and typography,
+ * never by color alone.
  */
 export const palette = {
-  bg: "#1a1b26",
-  panel: "#24283b",
-  panelAlt: "#1f2335",
-  border: "#3b4261",
-  text: "#c0caf5",
-  subtext: "#a9b1d6",
-  dim: "#565f89",
-  faint: "#3b4261",
-  accent: "#7aa2f7",
-  accentBright: "#89b4fa",
-  cyan: "#7dcfff",
-  green: "#9ece6a",
-  yellow: "#e0af68",
-  orange: "#ff9e64",
-  red: "#f7768e",
-  magenta: "#bb9af7",
-  teal: "#73daca",
+  bg: "#0e0e11",
+  surface: "#16161a",
+  surfaceAlt: "#1c1c22",
+  border: "#26262e",
+  text: "#e8e8ea",
+  subtext: "#a6a6b0",
+  dim: "#6f6f7a",
+  faint: "#3c3c45",
+
+  /** Warm electric yellow — the Tornedo lightning accent. */
+  accent: "#f2c14e",
+  accentBright: "#ffd97a",
+  accentDim: "#8f7225",
+
+  /** Restrained semantic colors. */
+  amber: "#d9a441",
+  orange: "#e8893b",
+  green: "#7fbf7f",
+  red: "#d96a5f",
+
+  /** Muted supporting colors (never bright blue). */
+  teal: "#5cbea8",
+  cyan: "#5fb0c0",
+  magenta: "#a98cc4",
 } as const;
 
 export type PaletteKey = keyof typeof palette;
@@ -29,5 +41,8 @@ export type PaletteKey = keyof typeof palette;
 export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
 /** Filled/empty progress bar cells. */
-export const BAR_FILLED = "█";
+export const BAR_FILLED = "━";
 export const BAR_EMPTY = "░";
+
+/** Generic fallback spinner for low-color terminals (degrades from braille). */
+export const SPINNER_FALLBACK = ["|", "/", "-", "\\"] as const;

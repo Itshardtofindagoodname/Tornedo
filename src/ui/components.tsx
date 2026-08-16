@@ -1,43 +1,110 @@
 /**
- * Small reusable UI atoms: header, footer/hints, toast, modal overlay and the
- * cursor-rendering text input. Presentation only — all key handling lives in
- * the App component.
+ * Reusable UI primitives: header/nav strip, contextual footer, search input,
+ * progress bar, status badges, key/value rows, empty & error states, and the
+ * overlay pieces (modal, select list, confirm). All presentation only — every
+ * keybinding and data decision lives in the App component.
  */
-import { Box, Text } from "ink";
+import { useRef } from "react";
+import { Box, Text, useBoxMetrics, type DOMElement } from "ink";
 import type { ReactNode } from "react";
-import { VERSION } from "../version.js";
 import { palette, SPINNER_FRAMES } from "./theme.js";
 
-// --- layout -------------------------------------------------------------
+export type Section = "search" | "downloads" | "sources" | "settings";
 
-export function Header({ right }: { right?: ReactNode }): ReactNode {
+const SECTION_LABELS: readonly { section: Section; number: string }[] = [
+  { section: "search", number: "1" },
+  { section: "downloads", number: "2" },
+  { section: "sources", number: "3" },
+  { section: "settings", number: "4" },
+];
+
+// --- header / navigation -----------------------------------------------------
+
+export function NavStrip({ active }: { active: Section }): ReactNode {
   return (
-    <Box width="100%" height={1} backgroundColor={palette.accent} paddingLeft={1}>
-      <Text color={palette.bg} bold>
-        ⚡ tornedo
-      </Text>
-      <Text color={palette.bg}>
-        {"  ·  "}federated torrent search v{VERSION}
-      </Text>
-      <Box flexGrow={1} alignItems="center" justifyContent="flex-end" paddingRight={2}>
-        {right}
+    <Box gap={2}>
+      {SECTION_LABELS.map(({ section, number }) => {
+        const isActive = section === active;
+        return (
+          <Box key={section}>
+            <Text color={isActive ? palette.accent : palette.dim} bold={isActive}>
+              {number}
+            </Text>
+            <Text color={isActive ? palette.text : palette.dim} bold={isActive}>
+              {" "}
+              {section}
+            </Text>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
+export interface HeaderProps {
+  active: Section;
+  right?: ReactNode;
+  /** Narrow terminal: drop the tagline and the right-side global hints. */
+  compact?: boolean;
+}
+
+export function Header({ active, right, compact }: HeaderProps): ReactNode {
+  return (
+    <Box flexDirection="column" width="100%">
+      <Box height={1} paddingX={1}>
+        <Text bold>
+          <Text color={palette.accent}>⚡</Text>
+          <Text color={palette.text}> tornedo</Text>
+        </Text>
+        {!compact ? <Text color={palette.dim}> · federated torrent search</Text> : null}
+        <Box flexGrow={1} />
+        {right ? <Box alignItems="center">{right}</Box> : null}
+      </Box>
+      <Box
+        height={1}
+        paddingX={1}
+        alignItems="center"
+      >
+        <NavStrip active={active} />
+        <Box flexGrow={1} />
+        {!compact ? (
+          <Text color={palette.faint}>? help · esc back · q quit</Text>
+        ) : null}
+      </Box>
+      <HeaderSeparator />
+    </Box>
+  );
+}
+
+/** Thin full-width rule under the nav strip. */
+function HeaderSeparator(): ReactNode {
+  const ref = useRef<DOMElement | null>(null);
+  const { width } = useBoxMetrics(ref);
+  return (
+    <Box paddingX={1}>
+      <Box ref={ref} width="100%">
+        <Text color={palette.border}>
+          {width > 0 ? "─".repeat(width) : ""}
+        </Text>
       </Box>
     </Box>
   );
 }
+
+// --- footer ------------------------------------------------------------------
 
 export interface HintItem {
   keys: string;
   label: string;
 }
 
-export function Hints({ items }: { items: readonly HintItem[] }): ReactNode {
+export function KeyHints({ items }: { items: readonly HintItem[] }): ReactNode {
   return (
-    <Box>
+    <Box flexGrow={1}>
       {items.map((hint, i) => (
         <Box key={i} marginRight={2}>
           <Text color={palette.accent} bold>
-            [{hint.keys}]
+            {hint.keys}
           </Text>
           <Text color={palette.dim}> {hint.label}</Text>
         </Box>
@@ -51,42 +118,36 @@ export function Footer({ hints }: { hints: readonly HintItem[] }): ReactNode {
     <Box
       width="100%"
       height={1}
-      backgroundColor={palette.panel}
-      paddingLeft={1}
-      alignItems="flex-start"
+      paddingX={1}
+      alignItems="center"
+      borderTop={true}
+      borderStyle="single"
+      borderColor={palette.border}
     >
-      <Hints items={hints} />
+      <KeyHints items={hints} />
     </Box>
   );
 }
 
 export function Toast({ children }: { children: ReactNode }): ReactNode {
   return (
-    <Box width="100%" height={1} backgroundColor={palette.panel} paddingLeft={1} alignItems="center">
+    <Box width="100%" height={1} paddingX={1} alignItems="center">
       <Text color={palette.subtext}>{children}</Text>
     </Box>
   );
 }
 
-// --- overlay --------------------------------------------------------------
+// --- overlay -------------------------------------------------------------------
 
 export function Modal({ title, children }: { title: string; children: ReactNode }): ReactNode {
   return (
-    <Box
-      position="absolute"
-      top={0}
-      left={0}
-      width="100%"
-      height="100%"
-      alignItems="center"
-      justifyContent="center"
-    >
+    <Box position="absolute" top={0} left={0} width="100%" height="100%" alignItems="center" justifyContent="center">
       <Box
         flexDirection="column"
         width={64}
         borderStyle="round"
-        borderColor={palette.accent}
-        backgroundColor={palette.panel}
+        borderColor={palette.border}
+        backgroundColor={palette.surface}
         paddingX={2}
         paddingY={1}
       >
@@ -99,32 +160,39 @@ export function Modal({ title, children }: { title: string; children: ReactNode 
   );
 }
 
-// --- text input --------------------------------------------------------------
+// --- text input ---------------------------------------------------------------
 
-export interface TextInputProps {
+export interface SearchInputProps {
   value: string;
   cursor: number;
   placeholder?: string;
-  accent?: string;
+  /** Prompt glyph shown in front of the field. */
+  prompt?: string;
 }
 
 /** Renders a line of text with a block cursor at `cursor`. */
-export function TextInput({ value, cursor, placeholder, accent = palette.accent }: TextInputProps): ReactNode {
+export function SearchInput({ value, cursor, placeholder, prompt = "›" }: SearchInputProps): ReactNode {
   if (value.length === 0) {
     return (
       <Box flexGrow={1}>
-        <Text backgroundColor={accent} color={palette.bg}>
+        <Text color={palette.accent} bold>
+          {prompt}{" "}
+        </Text>
+        <Text backgroundColor={palette.accent} color={palette.bg}>
           {" "}
         </Text>
-        {placeholder ? <Text dimColor> {placeholder}</Text> : null}
+        {placeholder ? <Text color={palette.dim}> {placeholder}</Text> : null}
       </Box>
     );
   }
   const clamped = Math.min(Math.max(0, cursor), value.length);
   return (
     <Box flexGrow={1}>
+      <Text color={palette.accent} bold>
+        {prompt}{" "}
+      </Text>
       <Text>{value.slice(0, clamped)}</Text>
-      <Text backgroundColor={accent} color={palette.bg}>
+      <Text backgroundColor={palette.accent} color={palette.bg}>
         {value[clamped] ?? " "}
       </Text>
       <Text>{value.slice(clamped + 1)}</Text>
@@ -132,55 +200,112 @@ export function TextInput({ value, cursor, placeholder, accent = palette.accent 
   );
 }
 
-// --- bits -------------------------------------------------------------------
+// --- bits ---------------------------------------------------------------------
 
 export function Spinner({ tick }: { tick: number }): ReactNode {
   const frame = SPINNER_FRAMES[tick % SPINNER_FRAMES.length]!;
   return <Text color={palette.accent}>{frame}</Text>;
 }
 
-export function ProgressBar({ progress, width, color = palette.cyan }: { progress: number; width: number; color?: string }): ReactNode {
+export interface ProgressBarProps {
+  progress: number;
+  width: number;
+  color?: string;
+  /** Filled cell; defaults to the Tornedo bar glyph. */
+  filled?: string;
+  /** Empty cell. */
+  empty?: string;
+}
+
+/** Deterministic, terminal-width-aware progress bar. */
+export function ProgressBar({ progress, width, color = palette.accent, filled = "━", empty = "░" }: ProgressBarProps): ReactNode {
   const p = Math.max(0, Math.min(1, progress));
-  const filled = Math.min(width, Math.floor(p * width));
-  const rest = width - filled;
+  const cells = Math.max(0, width);
+  const filledCells = Math.min(cells, Math.floor(p * cells));
+  const rest = cells - filledCells;
   return (
-    <Text color={color}>
-      {"█".repeat(filled)}
-      <Text color={palette.faint}>{"░".repeat(Math.max(0, rest))}</Text>
+    <Text>
+      <Text color={color}>{filled.repeat(filledCells)}</Text>
+      <Text color={palette.faint}>{empty.repeat(Math.max(0, rest))}</Text>
     </Text>
   );
 }
 
-/** Animated determinate progress: pulses the head cell while `active`. */
-export function AnimatedProgress({ progress, width, active, tick, color = palette.cyan }: { progress: number; width: number; active: boolean; tick: number; color?: string }): ReactNode {
-  const p = Math.max(0, Math.min(1, progress));
-  const filled = Math.min(width, Math.floor(p * width));
-  const rest = width - filled;
-  const parts: ReactNode[] = [];
-  if (filled > 0) parts.push(<Text key="done" color={color}>{"█".repeat(filled)}</Text>);
-  if (rest > 0) {
-    if (active && tick % 2 === 0) {
-      parts.push(<Text key="head" backgroundColor={color} color={palette.bg}>{" "}</Text>);
-      parts.push(<Text key="rest" color={palette.faint}>{"░".repeat(rest - 1)}</Text>);
-    } else {
-      parts.push(<Text key="rest" color={palette.faint}>{"░".repeat(rest)}</Text>);
-    }
-  }
-  return <Text>{parts}</Text>;
-}
-
-/** Indeterminate activity meter for speed/throughput. */
-export function ActivityMeter({ rate, tick }: { rate: number; tick: number }): ReactNode {
-  const full = Math.max(0, Math.min(12, Math.round((tick % 12) + rate * 8)));
+/** Small colored label pill for a state/health. */
+export function StatusBadge({ text, color = palette.dim }: { text: string; color?: string }): ReactNode {
   return (
-    <Text color={palette.cyan}>
-      {"▁▂▃▄▅▆▇█"[full % 8]}
-      <Text color={palette.faint}>{"▁▂▃▄▅▆▇█".slice(0, 1)}</Text>
+    <Text bold color={color}>
+      {text}
     </Text>
   );
 }
 
-// --- select / confirm ------------------------------------------------------
+/** A label + value pair, used in detail/diagnostics/settings rows. */
+export function KeyValue({
+  label,
+  value,
+  labelWidth = 12,
+  valueColor = palette.subtext,
+}: {
+  label: string;
+  value: ReactNode;
+  labelWidth?: number;
+  valueColor?: string;
+}): ReactNode {
+  return (
+    <Box height={1}>
+      <Box width={labelWidth}>
+        <Text color={palette.dim}>{label}</Text>
+      </Box>
+      <Text color={valueColor} wrap="truncate">
+        {value}
+      </Text>
+    </Box>
+  );
+}
+
+/** Subtle horizontal rule. */
+export function Separator({ width = "100%" }: { width?: string | number }): ReactNode {
+  return (
+    <Box width={width}>
+      <Text color={palette.border}>{"─".repeat(60)}</Text>
+    </Box>
+  );
+}
+
+/** Friendly empty-state block. */
+export function EmptyState({ message, hint }: { message: string; hint?: string }): ReactNode {
+  return (
+    <Box flexGrow={1} flexDirection="column" alignItems="center" justifyContent="center">
+      <Text color={palette.dim}>{message}</Text>
+      {hint ? (
+        <Box marginTop={1}>
+          <Text color={palette.faint}>{hint}</Text>
+        </Box>
+      ) : null}
+    </Box>
+  );
+}
+
+/** Error-state block used for a failed download. */
+export function ErrorState({ message, children }: { message: string; children?: ReactNode }): ReactNode {
+  return (
+    <Box flexDirection="column" paddingX={1} paddingY={1}>
+      <Box>
+        <Text color={palette.red} bold>
+          ⚠
+        </Text>
+        <Text color={palette.red} bold>
+          {" "}
+          {message}
+        </Text>
+      </Box>
+      {children}
+    </Box>
+  );
+}
+
+// --- select / confirm ---------------------------------------------------------
 
 export interface SelectOption<T extends string> {
   value: T;

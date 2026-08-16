@@ -29,7 +29,10 @@ export type KeyAction =
   | "quit"
   | "search"
   | "downloads"
-  | "toggleDetails";
+  | "sources"
+  | "settings"
+  | "toggleDetails"
+  | "openMagnet";
 
 export const KEY_ACTIONS: readonly KeyAction[] = [
   "up",
@@ -50,11 +53,14 @@ export const KEY_ACTIONS: readonly KeyAction[] = [
   "sort",
   "menu",
   "copyMagnet",
+  "openMagnet",
   "help",
   "back",
   "quit",
   "search",
   "downloads",
+  "sources",
+  "settings",
   "toggleDetails",
 ];
 
@@ -152,11 +158,14 @@ export function defaultKeybindings(): Partial<Record<KeyAction, string[]>> {
     sort: ["o"],
     menu: ["m"],
     copyMagnet: ["y"],
+    openMagnet: ["o"],
     help: ["?"],
     back: ["esc"],
     quit: ["q"],
-    search: ["/"],
-    downloads: ["v"],
+    search: ["/", "1"],
+    downloads: ["v", "2"],
+    sources: ["3"],
+    settings: ["4"],
     toggleDetails: ["i"],
   };
 }

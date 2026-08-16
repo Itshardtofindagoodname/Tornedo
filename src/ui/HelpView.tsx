@@ -1,6 +1,6 @@
 /**
- * Help view: the configured keybindings, laid out readably. Any key returns to
- * the previous view.
+ * Help overlay: a compact summary of navigation and the full set of
+ * configurable keybindings. Any key returns to the previous view.
  */
 import { Box, Text } from "ink";
 import type { Application } from "../app/application.js";
@@ -14,7 +14,7 @@ const ACTION_LABELS: Record<KeyAction, string> = {
   pagedown: "page down",
   home: "first item",
   end: "last item",
-  confirm: "confirm / download",
+  confirm: "confirm / open",
   download: "download",
   downloadTo: "download to…",
   pause: "pause",
@@ -26,45 +26,92 @@ const ACTION_LABELS: Record<KeyAction, string> = {
   sort: "sort results",
   menu: "download actions",
   copyMagnet: "show magnet",
+  openMagnet: "open magnet",
   help: "help",
   back: "back / cancel",
   quit: "quit",
-  search: "search again",
+  search: "search",
   downloads: "downloads view",
-  toggleDetails: "toggle details",
+  sources: "sources view",
+  settings: "settings view",
+  toggleDetails: "diagnostics",
 };
+
+const NAV: readonly { key: string; label: string }[] = [
+  { key: "1", label: "search" },
+  { key: "2", label: "downloads" },
+  { key: "3", label: "sources" },
+  { key: "4", label: "settings" },
+  { key: "?", label: "help" },
+  { key: "esc", label: "back" },
+  { key: "q", label: "quit" },
+];
 
 export function HelpView({ app }: { app: Application }): React.ReactNode {
   const bindings = app.getConfig().keybindings;
+
+  const rows = KEY_ACTIONS.map((action) => ({
+    action,
+    keys: bindings[action]?.join(", ") ?? "—",
+  }));
+  const half = Math.ceil(rows.length / 2);
+  const left = rows.slice(0, half);
+  const right = rows.slice(half);
+
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={2} paddingTop={1}>
       <Box justifyContent="center">
         <Text bold color={palette.accent}>
-          Keybindings
+          ⚡ TORNEDO
         </Text>
       </Box>
-      <Box
-        flexDirection="column"
-        marginTop={1}
-        borderStyle="round"
-        borderColor={palette.border}
-        paddingX={2}
-        paddingY={1}
-      >
-        {KEY_ACTIONS.map((action) => {
-          const keys = bindings[action]?.join(", ") ?? "—";
+
+      <Box flexDirection="column" marginTop={1}>
+        <Text color={palette.faint}>navigation</Text>
+        <Box height={1}>
+          <Text color={palette.subtext}>
+            {NAV.map((n, i) => (
+              <Text key={n.key}>
+                {i > 0 ? <Text color={palette.dim}>  ·  </Text> : null}
+                <Text color={palette.accent} bold>
+                  {n.key}
+                </Text>{" "}
+                {n.label}
+              </Text>
+            ))}
+          </Text>
+        </Box>
+      </Box>
+
+      <Box flexDirection="column" marginTop={1}>
+        <Text color={palette.faint}>Keybindings</Text>
+        {left.map((r, i) => {
+          const rightRow = right[i];
           return (
-            <Box key={action} height={1}>
-              <Box width={22}>
-                <Text color={palette.dim}>{ACTION_LABELS[action]}</Text>
+            <Box key={r.action} height={1}>
+              <Box width={24}>
+                <Text color={palette.dim}>{ACTION_LABELS[r.action]}</Text>
               </Box>
-              <Text color={palette.accent}>{keys}</Text>
+              <Box width={12}>
+                <Text color={palette.accent}>{r.keys}</Text>
+              </Box>
+              {rightRow ? (
+                <>
+                  <Box width={24}>
+                    <Text color={palette.dim}>{ACTION_LABELS[rightRow.action]}</Text>
+                  </Box>
+                  <Text color={palette.accent}>{rightRow.keys}</Text>
+                </>
+              ) : null}
             </Box>
           );
         })}
       </Box>
-      <Box justifyContent="center" marginTop={1}>
-        <Text dimColor>Press any key to go back.</Text>
+
+      <Box flexGrow={1} />
+
+      <Box justifyContent="center" paddingBottom={1}>
+        <Text dimColor>press any key to go back</Text>
       </Box>
     </Box>
   );

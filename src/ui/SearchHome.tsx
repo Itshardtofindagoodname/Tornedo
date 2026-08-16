@@ -1,69 +1,112 @@
 /**
- * Home / search view: a centered hero with the app wordmark and the search
- * input. All input handling lives in App; this stays presentational.
+ * Home / search view: a hero with the wordmark, the primary search input,
+ * recent searches from this session, and a live snapshot of the download
+ * queue. All input handling lives in App; this stays presentational.
  */
 import { Box, Text } from "ink";
-import { TextInput } from "./components.js";
+import type { TorrentItem } from "../model/torrent.js";
+import { SearchInput } from "./components.js";
 import { palette } from "./theme.js";
+import { downloadState, stateLabel } from "./state.js";
+import { stateColor, stateGlyph } from "./format.js";
 
 export interface SearchHomeProps {
   query: string;
   cursor: number;
+  recentSearches: readonly string[];
+  /** Selected recent search (only active while the query is empty). */
+  recentIndex: number;
+  downloads: readonly TorrentItem[];
   enabledSources: number;
-  healthSources: number;
-  maxActiveDownloads: number;
+  healthCounts: { healthy: number; degraded: number; unavailable: number };
+  activeDownloads: number;
+  compact?: boolean;
 }
 
 export function SearchHome({
   query,
   cursor,
+  recentSearches,
+  recentIndex,
+  downloads,
   enabledSources,
-  healthSources,
-  maxActiveDownloads,
+  healthCounts,
+  activeDownloads,
+  compact,
 }: SearchHomeProps): React.ReactNode {
-  const concurrency = maxActiveDownloads > 0 ? `${maxActiveDownloads} max active downloads` : "unlimited downloads";
+  const canBrowse = query.length === 0 && recentSearches.length > 0;
+  const active = downloads.slice(0, 3);
+
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={2}>
-      <Box flexGrow={1} />
+      <Box height={compact ? 1 : 3} />
 
       <Box justifyContent="center">
-        <Text color={palette.magenta} bold>
-          ⚡ tornedo
+        <Text bold>
+          <Text color={palette.accent}>⚡</Text>
+          <Text color={palette.text}> tornedo</Text>
         </Text>
       </Box>
-      <Box justifyContent="center" marginTop={1}>
-        <Text color={palette.subtext}>local-first · terminal-native · federated torrent search</Text>
-      </Box>
+      {!compact ? (
+        <Box justifyContent="center" marginTop={1}>
+          <Text color={palette.dim}>local-first · terminal-native · federated torrent search</Text>
+        </Box>
+      ) : null}
 
-      <Box flexGrow={1} />
-
-      <Box justifyContent="center" width="100%">
-        <Box
-          flexDirection="column"
-          width="64%"
-          borderStyle="round"
-          borderColor={palette.border}
-          backgroundColor={palette.panelAlt}
-          paddingX={2}
-          paddingY={1}
-        >
-          <Text dimColor>search</Text>
+      <Box justifyContent="center" width="100%" marginTop={compact ? 2 : 4}>
+        <Box flexDirection="column" width="62%">
+          <SearchInput value={query} cursor={cursor} placeholder="search for torrents…" prompt="›" />
           <Box marginTop={1}>
-            <Text color={palette.accent} bold>
-              ❯{" "}
-            </Text>
-            <TextInput value={query} cursor={cursor} placeholder="a movie, show, game, anime, album…" />
+            <Text color={palette.faint}>enter to search · search every enabled source at once</Text>
           </Box>
         </Box>
       </Box>
 
-      <Box justifyContent="center" marginTop={1}>
-        <Text dimColor>
-          {enabledSources} sources enabled · {healthSources} report swarm health · {concurrency}
-        </Text>
-      </Box>
+      {recentSearches.length > 0 ? (
+        <Box flexDirection="column" marginTop={compact ? 2 : 4} paddingX={4}>
+          <Text color={palette.faint}>recent searches</Text>
+          {recentSearches.map((q, i) => (
+            <Box key={q} height={1}>
+              <Text color={canBrowse && i === recentIndex ? palette.accent : palette.faint} bold={canBrowse && i === recentIndex}>
+                {canBrowse && i === recentIndex ? "› " : "  "}
+              </Text>
+              <Text color={canBrowse && i === recentIndex ? palette.text : palette.dim}>{q}</Text>
+            </Box>
+          ))}
+        </Box>
+      ) : null}
+
+      {active.length > 0 ? (
+        <Box flexDirection="column" marginTop={compact ? 2 : 4} paddingX={4}>
+          <Text color={palette.faint}>recent activity</Text>
+          {active.map((item) => {
+            const state = downloadState(item);
+            return (
+              <Box key={item.id} height={1}>
+                <Text color={stateColor(state)}>{stateGlyph(state)}</Text>
+                <Box width={2} />
+                <Text color={palette.subtext} wrap="truncate">
+                  {item.name}
+                </Text>
+                <Text color={palette.dim}>  {stateLabel(state)}</Text>
+              </Box>
+            );
+          })}
+        </Box>
+      ) : null}
 
       <Box flexGrow={1} />
+
+      <Box justifyContent="center" paddingBottom={1}>
+        <Text color={palette.dim}>
+          {enabledSources} sources enabled
+          {healthCounts.healthy > 0 ? <Text color={palette.green}> · ● {healthCounts.healthy} healthy</Text> : null}
+          {healthCounts.degraded > 0 ? <Text color={palette.amber}> · ◐ {healthCounts.degraded} degraded</Text> : null}
+          {healthCounts.unavailable > 0 ? <Text color={palette.red}> · ○ {healthCounts.unavailable} unavailable</Text> : null}
+          <Text> · </Text>
+          <Text color={activeDownloads > 0 ? palette.accent : palette.dim}>{activeDownloads} active downloads</Text>
+        </Text>
+      </Box>
     </Box>
   );
 }

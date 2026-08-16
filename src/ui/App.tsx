@@ -1,14 +1,20 @@
 /**
- * TornedoApp: the Ink application root. Owns all UI state, subscribes to the
- * search session and download manager, and translates every keypress into a
- * logical action. The views below it are purely presentational.
+ * TornedoApp: the Ink application root. Owns all UI/navigation state, subscribes
+ * to the search session and download manager, and translates every keypress
+ * into a logical action. The views below it are purely presentational.
+ *
+ * Navigation model:
+ *   1 Search · 2 Downloads · 3 Sources · 4 Settings
+ *   ? help · esc back/close · q quit · ctrl+c quit safely
  */
 import { useEffect, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useWindowSize, type Key } from "ink";
+import { spawn } from "node:child_process";
 import type { Application } from "../app/application.js";
-import type { SearchSession } from "../app/search-service.js";
+import type { SearchSession, SourceReport } from "../app/search-service.js";
 import type { KeyAction } from "../config/config.js";
 import { MEDIA_CATEGORIES, type MediaCategory } from "../model/search.js";
+import type { Release } from "../model/search.js";
 import type { TorrentItem } from "../model/torrent.js";
 import {
   parseFilterText,
@@ -23,21 +29,25 @@ import {
   Header,
   Modal,
   SelectList,
-  TextInput,
+  SearchInput,
   Toast,
   type HintItem,
+  type Section,
   type SelectOption,
 } from "./components.js";
+import { DetailView } from "./DetailView.js";
 import { DownloadsView } from "./DownloadsView.js";
 import { HelpView } from "./HelpView.js";
 import { useManagerEvents, useRecovery, useRerenderInterval, useSearchSession } from "./hooks.js";
 import { firstKey, matchKey } from "./keys.js";
 import { filteredReleases, ResultsView } from "./ResultsView.js";
 import { SearchHome } from "./SearchHome.js";
+import { SettingsView, type SettingsRow } from "./SettingsView.js";
+import { SourcesView } from "./SourcesView.js";
 import { palette } from "./theme.js";
 import { applyTyping } from "./text.js";
 
-type View = "home" | "results" | "downloads" | "help";
+type View = "home" | "results" | "details" | "downloads" | "sources" | "settings" | "help";
 
 type Overlay =
   | { kind: "prompt"; title: string; hint?: string; onSubmit: (value: string) => void }
@@ -49,18 +59,24 @@ export interface TornedoAppProps {
 }
 
 const PAGE_STEP = 10;
+const MAX_RECENT = 5;
 
 export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   const { exit } = useApp();
-  const { rows } = useWindowSize();
+  const { rows, columns } = useWindowSize();
+  const wide = columns >= 120;
+  const compact = columns < 64;
 
   const [view, setView] = useState<View>("home");
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
+  const [recentQueries, setRecentQueries] = useState<string[]>([]);
+  const [recentIndex, setRecentIndex] = useState(0);
   const [selected, setSelected] = useState(0);
   const [selectedDownload, setSelectedDownload] = useState(0);
+  const [sourcesSelected, setSourcesSelected] = useState(0);
+  const [settingsSelectedId, setSettingsSelectedId] = useState("");
   const [downloadDiagnostics, setDownloadDiagnostics] = useState(false);
-  const [details, setDetails] = useState(false);
   const [filter, setFilter] = useState("");
   const [session, setSession] = useState<SearchSession | null>(null);
 
@@ -104,16 +120,33 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
     setView(next);
   };
 
+  const back = (): void => {
+    switch (view) {
+      case "home":
+        exit();
+        break;
+      case "results":
+        setView("home");
+        break;
+      case "details":
+        setView("results");
+        break;
+      default:
+        setView(prevView.current);
+        break;
+    }
+  };
+
   // --- search ---------------------------------------------------------------
 
-  const startSearch = (): void => {
-    const q = query.trim();
-    if (!q) {
+  const startSearch = (q?: string): void => {
+    const text = (q ?? query).trim();
+    if (!text) {
       showMessage("Type a query first.");
       return;
     }
     if (session) session.cancel();
-    const s = app.searchService.createSession(q);
+    const s = app.searchService.createSession(text);
     setSession(s);
     s.start();
     setSelected(0);
@@ -122,8 +155,11 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
     setReleaseFilter({});
     setFilterText("");
     setSortOption(SORT_OPTIONS[0]!);
-    setDetails(false);
     setView("results");
+    setRecentQueries((prev) => {
+      const next = [text, ...prev.filter((x) => x !== text)];
+      return next.slice(0, MAX_RECENT);
+    });
   };
 
   // --- overlays ---------------------------------------------------------------
@@ -232,11 +268,18 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
 
   const currentReleases = (): ReturnType<typeof filteredReleases> => filteredReleases(session, filter, releaseFilter, categoryScope);
 
-  const downloadSelected = (destination?: string): void => {
+  const currentRelease = (): { rels: ReturnType<typeof filteredReleases>; index: number } | null => {
     const rels = currentReleases();
-    const idx = Math.min(selected, Math.max(0, rels.length - 1));
-    const r = rels[idx];
-    if (!r) return;
+    const len = rels.length;
+    if (len === 0) return null;
+    const index = Math.min(selected, len - 1);
+    return { rels, index };
+  };
+
+  const downloadSelected = (destination?: string): void => {
+    const cur = currentRelease();
+    if (!cur) return;
+    const r = cur.rels[cur.index]!;
     if (r.magnet && !/^magnet:/i.test(r.magnet)) {
       showMessage(`Direct-download source (${r.category}); the torrent engine cannot fetch "${truncate(r.magnet, 30)}"`);
       return;
@@ -289,6 +332,41 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
       showMessage(`Opening: ${truncate(item.destination ?? item.name, 60)}`);
     } else {
       showMessage(`Location: ${item.destination ?? "unknown"}`);
+    }
+  };
+
+  const showMagnetSelected = (): void => {
+    const cur = currentRelease();
+    if (!cur) return;
+    const r = cur.rels[cur.index]!;
+    showMessage(`magnet: ${truncate(r.magnet, 140)}`);
+  };
+
+  const openMagnetSelected = (): void => {
+    const cur = currentRelease();
+    if (!cur) return;
+    const r = cur.rels[cur.index]!;
+    const uri = r.magnet;
+    const platform = process.platform;
+    let cmd: string;
+    let args: string[];
+    if (platform === "win32") {
+      cmd = "explorer";
+      args = [uri];
+    } else if (platform === "darwin") {
+      cmd = "open";
+      args = [uri];
+    } else {
+      cmd = "xdg-open";
+      args = [uri];
+    }
+    try {
+      const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
+      child.on("error", () => showMessage(`Cannot open magnet externally — magnet: ${truncate(uri, 120)}`));
+      child.unref();
+      showMessage("Opening magnet in your default handler…");
+    } catch {
+      showMessage(`magnet: ${truncate(uri, 140)}`);
     }
   };
 
@@ -376,11 +454,140 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
     );
   };
 
+  // --- settings ----------------------------------------------------------------
+
+  const buildSettingsRows = (): SettingsRow[] => {
+    const cfg = app.getConfig();
+    const rate = (v: number): string => (v > 0 ? `${Math.round(v)} B/s` : "unlimited");
+    const rows: SettingsRow[] = [
+      { type: "header", label: "DOWNLOADS" },
+      { type: "item", id: "downloadDir", label: "Download directory", value: cfg.downloadDir },
+      { type: "item", id: "maxActiveDownloads", label: "Max active downloads", value: cfg.maxActiveDownloads > 0 ? String(cfg.maxActiveDownloads) : "unlimited" },
+      { type: "toggle", id: "seedAfterComplete", label: "Seed after complete", value: cfg.seedAfterComplete },
+      { type: "item", id: "maxDownloadSpeed", label: "Download speed limit", value: rate(cfg.maxDownloadSpeed) },
+      { type: "item", id: "maxUploadSpeed", label: "Upload speed limit", value: rate(cfg.maxUploadSpeed) },
+      { type: "header", label: "SEARCH" },
+      { type: "item", id: "sourceTimeoutMs", label: "Source timeout", value: `${cfg.sourceTimeoutMs} ms` },
+      { type: "toggle", id: "internetArchive", label: "Internet Archive", value: cfg.internetArchive.enabled },
+      { type: "header", label: "SOURCES" },
+      ...app.sources.map((s) => ({ type: "source" as const, id: `source:${s.id}`, label: s.name, value: app.isSourceEnabled(s.id) })),
+      { type: "header", label: "ADVANCED" },
+      { type: "toggle", id: "recoveryAutoResume", label: "Auto-resume after crash", value: cfg.recoveryAutoResume },
+      { type: "item", id: "watchIntervalMs", label: "Watch interval", value: `${cfg.watchIntervalMs} ms` },
+      { type: "item", id: "diskSpaceWarningMb", label: "Disk space warning", value: `${cfg.diskSpaceWarningMb} MiB` },
+    ];
+    return rows;
+  };
+
+  const settingsOrder = (): string[] => {
+    return buildSettingsRows().filter((r) => r.type !== "header").map((r) => r.id);
+  };
+
+  const moveSettings = (dir: 1 | -1): void => {
+    const order = settingsOrder();
+    if (order.length === 0) return;
+    const idx = order.indexOf(settingsSelectedId);
+    const next = idx < 0 ? 0 : Math.max(0, Math.min(order.length - 1, idx + dir));
+    setSettingsSelectedId(order[next]!);
+  };
+
+  const editSettings = (): void => {
+    const cfg = app.getConfig();
+    const id = settingsSelectedId;
+    const row = buildSettingsRows().find((r) => r.type !== "header" && r.id === id);
+    if (!row) return;
+
+    const update = (patch: Partial<typeof cfg>): void => {
+      void app.updateConfig(patch);
+      showMessage("Settings updated.");
+    };
+    const updateNumber = (label: string, patch: (n: number) => Partial<typeof cfg>): void => {
+      openPrompt(label, "", (raw) => {
+        const n = Number(raw.trim());
+        if (!raw.trim() || !Number.isFinite(n) || n < 0) {
+          showMessage("Enter a valid number.");
+          editSettings();
+          return;
+        }
+        update(patch(n));
+      }, "number, 0 = unlimited where applicable");
+    };
+
+    switch (row.type) {
+      case "toggle":
+        if (id === "internetArchive") {
+          update({ internetArchive: { ...cfg.internetArchive, enabled: !cfg.internetArchive.enabled } });
+        } else {
+          update({ [id]: !row.value } as Partial<typeof cfg>);
+        }
+        break;
+      case "source": {
+        const sourceId = id.slice("source:".length);
+        app.setSourceEnabled(sourceId, !row.value);
+        showMessage(`${row.label} ${!row.value ? "enabled" : "disabled"}.`);
+        break;
+      }
+      case "item":
+        switch (id) {
+          case "downloadDir":
+            openPrompt("download directory", cfg.downloadDir, (v) => {
+              if (v.trim()) update({ downloadDir: v.trim() });
+            });
+            break;
+          case "maxActiveDownloads":
+            updateNumber("max active downloads", (n) => ({ maxActiveDownloads: Math.floor(n) }));
+            break;
+          case "maxDownloadSpeed":
+            updateNumber("download speed limit (B/s)", (n) => ({ maxDownloadSpeed: Math.floor(n) }));
+            break;
+          case "maxUploadSpeed":
+            updateNumber("upload speed limit (B/s)", (n) => ({ maxUploadSpeed: Math.floor(n) }));
+            break;
+          case "sourceTimeoutMs":
+            updateNumber("source timeout (ms)", (n) => ({ sourceTimeoutMs: Math.max(1, Math.floor(n)) }));
+            break;
+          case "watchIntervalMs":
+            updateNumber("watch interval (ms)", (n) => ({ watchIntervalMs: Math.max(50, Math.floor(n)) }));
+            break;
+          case "diskSpaceWarningMb":
+            updateNumber("disk space warning (MiB)", (n) => ({ diskSpaceWarningMb: Math.floor(n) }));
+            break;
+          default:
+            break;
+        }
+        break;
+    }
+  };
+
   // --- key dispatch ------------------------------------------------------------
 
+  const navigateAction = (action: KeyAction | null): boolean => {
+    switch (action) {
+      case "search":
+        setView("home");
+        setCursor(query.length);
+        return true;
+      case "downloads":
+        goto("downloads");
+        return true;
+      case "sources":
+        goto("sources");
+        return true;
+      case "settings":
+        goto("settings");
+        if (!settingsSelectedId) {
+          const order = settingsOrder();
+          if (order.length > 0) setSettingsSelectedId(order[0]!);
+        }
+        return true;
+      default:
+        return false;
+    }
+  };
+
   const handleResultsKey = (action: KeyAction | null): void => {
-    const rels = currentReleases();
-    const last = Math.max(0, rels.length - 1);
+    const cur = currentRelease();
+    const last = Math.max(0, (cur?.rels.length ?? 1) - 1);
     switch (action) {
       case "up":
         setSelected((s) => Math.max(0, s - 1));
@@ -401,6 +608,8 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
         setSelected(last);
         break;
       case "confirm":
+        if (cur) goto("details");
+        break;
       case "download":
         downloadSelected();
         break;
@@ -408,9 +617,6 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
         openPrompt("download to", app.getConfig().downloadDir, (dir) => {
           if (dir.trim()) downloadSelected(dir.trim());
         });
-        break;
-      case "toggleDetails":
-        setDetails((d) => !d);
         break;
       case "filter":
         openFilterEditor();
@@ -421,26 +627,49 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
       case "sort":
         openSortSelector();
         break;
-      case "search":
-        setView("home");
-        setCursor(query.length);
+      case "copyMagnet":
+        showMagnetSelected();
         break;
-      case "downloads":
-        goto("downloads");
-        break;
-      case "help":
-        goto("help");
+      case "openMagnet":
+        openMagnetSelected();
         break;
       case "back":
         setView("home");
         break;
-      case "copyMagnet": {
-        const idx = Math.min(selected, last);
-        const r = rels[idx];
-        if (r) showMessage(`magnet: ${truncate(r.magnet, 140)}`);
+      case "help":
+        goto("help");
         break;
-      }
       default:
+        navigateAction(action);
+        break;
+    }
+  };
+
+  const handleDetailsKey = (action: KeyAction | null): void => {
+    switch (action) {
+      case "confirm":
+      case "download":
+        downloadSelected();
+        break;
+      case "downloadTo":
+        openPrompt("download to", app.getConfig().downloadDir, (dir) => {
+          if (dir.trim()) downloadSelected(dir.trim());
+        });
+        break;
+      case "copyMagnet":
+        showMagnetSelected();
+        break;
+      case "openMagnet":
+        openMagnetSelected();
+        break;
+      case "back":
+        setView("results");
+        break;
+      case "help":
+        goto("help");
+        break;
+      default:
+        navigateAction(action);
         break;
     }
   };
@@ -498,6 +727,89 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
         goto("help");
         break;
       default:
+        navigateAction(action);
+        break;
+    }
+  };
+
+  const handleSourcesKey = (action: KeyAction | null): void => {
+    const last = Math.max(0, app.sources.length - 1);
+    switch (action) {
+      case "up":
+        setSourcesSelected((s) => Math.max(0, s - 1));
+        break;
+      case "down":
+        setSourcesSelected((s) => Math.min(last, s + 1));
+        break;
+      case "back":
+        setView(prevView.current);
+        break;
+      case "help":
+        goto("help");
+        break;
+      default:
+        navigateAction(action);
+        break;
+    }
+  };
+
+  const handleSettingsKey = (action: KeyAction | null): void => {
+    switch (action) {
+      case "up":
+        moveSettings(-1);
+        break;
+      case "down":
+        moveSettings(1);
+        break;
+      case "pageup":
+        for (let i = 0; i < 5; i++) moveSettings(-1);
+        break;
+      case "pagedown":
+        for (let i = 0; i < 5; i++) moveSettings(1);
+        break;
+      case "confirm":
+        editSettings();
+        break;
+      case "back":
+        setView(prevView.current);
+        break;
+      case "help":
+        goto("help");
+        break;
+      default:
+        navigateAction(action);
+        break;
+    }
+  };
+
+  const handleHomeKey = (action: KeyAction | null, input: string, key: Key): void => {
+    const canBrowse = query.length === 0 && recentQueries.length > 0;
+    switch (action) {
+      case "up":
+        if (canBrowse) setRecentIndex((i) => Math.max(0, i - 1));
+        break;
+      case "down":
+        if (canBrowse) setRecentIndex((i) => Math.min(recentQueries.length - 1, i + 1));
+        break;
+      case "confirm":
+        if (query.trim()) startSearch();
+        else if (canBrowse) startSearch(recentQueries[recentIndex]);
+        else showMessage("Type a query first.");
+        break;
+      case "help":
+        goto("help");
+        break;
+      case "back":
+        exit();
+        break;
+      default:
+        // Only navigate via 1-4 while the search field is empty, so queries
+        // that start with digits keep working while typing.
+        if (query.length === 0 && navigateAction(action)) return;
+        const next = applyTyping(query, cursor, input, key);
+        setQuery(next.value);
+        setCursor(next.cursor);
+        if (next.value !== query) setRecentIndex(0);
         break;
     }
   };
@@ -510,25 +822,22 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
     const action = matchKey(app.getConfig().keybindings, input, key);
     switch (view) {
       case "home":
-        if (action === "confirm") {
-          startSearch();
-        } else if (action === "downloads") {
-          goto("downloads");
-        } else if (action === "help") {
-          goto("help");
-        } else if (action === "back") {
-          exit();
-        } else {
-          const next = applyTyping(query, cursor, input, key);
-          setQuery(next.value);
-          setCursor(next.cursor);
-        }
+        handleHomeKey(action, input, key);
         break;
       case "results":
         handleResultsKey(action);
         break;
+      case "details":
+        handleDetailsKey(action);
+        break;
       case "downloads":
         handleDownloadsKey(action);
+        break;
+      case "sources":
+        handleSourcesKey(action);
+        break;
+      case "settings":
+        handleSettingsKey(action);
         break;
       case "help":
         if (action === "quit") exit();
@@ -547,22 +856,28 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   switch (view) {
     case "home":
       hints = [
-        { keys: "enter", label: "search" },
-        { keys: fk("downloads", "v"), label: "downloads" },
+        { keys: fk("confirm", "enter"), label: "search" },
+        { keys: "↑↓", label: "recent" },
         { keys: fk("help", "?"), label: "help" },
         { keys: "esc", label: "quit" },
       ];
       break;
     case "results":
       hints = [
+        { keys: fk("confirm", "enter"), label: "open" },
+        { keys: fk("download", "d"), label: "download" },
+        { keys: fk("search", "/"), label: "search" },
+        { keys: fk("downloads", "2"), label: "downloads" },
+        { keys: fk("help", "?"), label: "help" },
+      ];
+      break;
+    case "details":
+      hints = [
         { keys: fk("confirm", "enter"), label: "download" },
         { keys: fk("downloadTo", "D"), label: "download to" },
-        { keys: fk("filter", "ctrl+f"), label: "filter" },
-        { keys: fk("category", "c"), label: "category" },
-        { keys: fk("sort", "o"), label: "sort" },
-        { keys: fk("downloads", "v"), label: "downloads" },
-        { keys: fk("help", "?"), label: "help" },
-        { keys: fk("quit", "q"), label: "quit" },
+        { keys: fk("copyMagnet", "y"), label: "copy magnet" },
+        { keys: fk("openMagnet", "o"), label: "open magnet" },
+        { keys: "esc", label: "back" },
       ];
       break;
     case "downloads":
@@ -570,11 +885,26 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
         { keys: fk("pause", "p"), label: "pause" },
         { keys: fk("resume", "r"), label: "resume" },
         { keys: fk("menu", "m"), label: "actions" },
-        { keys: fk("toggleSeed", "s"), label: "seed" },
         { keys: fk("toggleDetails", "i"), label: "diagnostics" },
-        { keys: fk("back", "esc"), label: "back" },
+        { keys: "esc", label: "back" },
         { keys: fk("help", "?"), label: "help" },
-        { keys: fk("quit", "q"), label: "quit" },
+      ];
+      break;
+    case "sources":
+      hints = [
+        { keys: "↑↓", label: "inspect" },
+        { keys: fk("search", "1"), label: "search" },
+        { keys: fk("downloads", "2"), label: "downloads" },
+        { keys: fk("settings", "4"), label: "settings" },
+        { keys: fk("help", "?"), label: "help" },
+      ];
+      break;
+    case "settings":
+      hints = [
+        { keys: "enter", label: "edit" },
+        { keys: "↑↓", label: "navigate" },
+        { keys: "esc", label: "back" },
+        { keys: fk("help", "?"), label: "help" },
       ];
       break;
     case "help":
@@ -583,26 +913,51 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   }
 
   const enabledSources = app.sources.filter((s) => app.isSourceEnabled(s.id)).length;
-  const healthSources = app.sources.filter((s) => s.reportsHealth && app.isSourceEnabled(s.id)).length;
   const summary = app.manager.summary();
 
+  const section: Section = view === "help" ? (prevView.current as Section) : sectionForView(view);
+
+  const reports = session?.sourceReports() ?? new Map<string, SourceReport>();
+  const healthCounts: { healthy: number; degraded: number; unavailable: number } = { healthy: 0, degraded: 0, unavailable: 0 };
+  for (const [id, r] of reports) {
+    if (!app.isSourceEnabled(id)) continue;
+    if (r.health === "healthy" || r.health === "working") healthCounts.healthy++;
+    else if (r.health === "degraded") healthCounts.degraded++;
+    else if (r.health === "failed" || r.health === "unsupported") healthCounts.unavailable++;
+  }
+
   const headerRight = (
-    <Text color={palette.bg}>
-      {enabledSources} sources · {summary.active + summary.seeding} active
+    <Text color={palette.dim}>
+      {enabledSources} sources ·{" "}
+      <Text color={summary.active > 0 ? palette.accent : palette.dim}>
+        {summary.active + summary.seeding} active
+      </Text>
     </Text>
   );
 
+  const detailsRelease = ((): Release | null => {
+    if (view !== "details") return null;
+    const cur = currentRelease();
+    return cur ? (cur.rels[cur.index] ?? null) : null;
+  })();
+
+  const settingsRows = view === "settings" ? buildSettingsRows() : [];
+
   return (
     <Box flexDirection="column" height={rows}>
-      <Header right={headerRight} />
+      <Header active={section} right={headerRight} compact={compact} />
       <Box flexGrow={1} flexDirection="column" minHeight={0}>
         {view === "home" ? (
           <SearchHome
             query={query}
             cursor={cursor}
+            recentSearches={recentQueries}
+            recentIndex={recentIndex}
+            downloads={app.manager.list()}
             enabledSources={enabledSources}
-            healthSources={healthSources}
-            maxActiveDownloads={cfg.maxActiveDownloads}
+            healthCounts={healthCounts}
+            activeDownloads={summary.active}
+            compact={compact}
           />
         ) : null}
         {view === "results" ? (
@@ -610,15 +965,20 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
             app={app}
             session={session}
             selected={selected}
-            details={details}
             filter={filter}
             sortSpec={sortOption.spec}
             categoryScope={categoryScope}
             releaseFilter={releaseFilter}
             tick={tick}
+            wide={wide}
           />
         ) : null}
-        {view === "downloads" ? <DownloadsView app={app} selected={selectedDownload} diagnostics={downloadDiagnostics} tick={tick} /> : null}
+        {view === "details" && detailsRelease ? <DetailView app={app} release={detailsRelease} /> : null}
+        {view === "downloads" ? (
+          <DownloadsView app={app} selected={selectedDownload} diagnostics={downloadDiagnostics} tick={tick} wide={wide} />
+        ) : null}
+        {view === "sources" ? <SourcesView app={app} reports={reports} selected={sourcesSelected} /> : null}
+        {view === "settings" ? <SettingsView rows={settingsRows} selectedId={settingsSelectedId} /> : null}
         {view === "help" ? <HelpView app={app} /> : null}
       </Box>
       {message ? <Toast>{message}</Toast> : null}
@@ -633,7 +993,7 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
 
       {overlay?.kind === "prompt" ? (
         <Modal title={overlay.title}>
-          <TextInput value={promptValue} cursor={promptCursor} />
+          <SearchInput value={promptValue} cursor={promptCursor} prompt="›" />
           <Box marginTop={1} width={58}>
             <Text dimColor wrap="truncate">{overlay.hint ?? "enter confirm · esc cancel"}</Text>
           </Box>
@@ -654,15 +1014,28 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   );
 }
 
+function sectionForView(view: View): Section {
+  switch (view) {
+    case "downloads":
+      return "downloads";
+    case "sources":
+      return "sources";
+    case "settings":
+      return "settings";
+    default:
+      return "search";
+  }
+}
+
 function RecoveryBanner({ resumed, completed, failed }: { resumed: number; completed: number; failed: number }): React.ReactNode {
   return (
-    <Box width="100%" height={1} backgroundColor={palette.yellow} paddingLeft={1} alignItems="center">
-      <Text color={palette.bg} bold>
+    <Box width="100%" height={1} backgroundColor={palette.surfaceAlt} paddingLeft={1} alignItems="center">
+      <Text color={palette.accent} bold>
         ⚠ recovered from previous run
       </Text>
-      <Text color={palette.bg}>
+      <Text color={palette.dim}>
         {"  ·  "}{resumed} resumed · {completed} verified complete
-        {failed > 0 ? <Text color={palette.bg} bold> · {failed} failed</Text> : null}
+        {failed > 0 ? <Text color={palette.red} bold> · {failed} failed</Text> : null}
       </Text>
     </Box>
   );

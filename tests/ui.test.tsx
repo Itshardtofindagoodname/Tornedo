@@ -110,7 +110,7 @@ function makeApp(): Application {
   return {
     searchService,
     manager: new FakeManager() as unknown as TorrentManager,
-    sources: [],
+    sources: [fakeSource("yts", "YTS", [])],
     healthSources: new Set(["yts"]),
     getConfig: () => defaultConfig(),
     isSourceEnabled: () => true,
@@ -180,7 +180,7 @@ describe("TUI", () => {
     expect(instance.lastFrame() ?? "").toContain("Downloads");
   });
 
-  it("queues a download from the results list", async () => {
+  it("opens the details inspector and queues a download from it", async () => {
     const app = makeApp();
     const instance = render(<TornedoApp app={app} />);
     await wait(30);
@@ -188,6 +188,10 @@ describe("TUI", () => {
     await wait(30);
     key(instance, "\r");
     await wait(80);
+
+    key(instance, "\r");
+    await wait(30);
+    expect(instance.lastFrame() ?? "").toContain("← search results");
 
     key(instance, "\r");
     await wait(30);
@@ -254,5 +258,96 @@ describe("TUI", () => {
     expect(frame).toContain("recovered from previous run");
     expect(frame).toContain("1 resumed");
     expect(frame).toContain("0 verified complete");
+  });
+
+  it("navigates between the four primary sections with 1-4", async () => {
+    const instance = render(<TornedoApp app={makeApp()} />);
+    await wait(30);
+
+    key(instance, "3");
+    await wait(30);
+    expect(instance.lastFrame() ?? "").toContain("Sources");
+    expect(instance.lastFrame() ?? "").toContain("YTS");
+
+    key(instance, "4");
+    await wait(30);
+    const settings = instance.lastFrame() ?? "";
+    expect(settings).toContain("Settings");
+    expect(settings).toContain("Download directory");
+    expect(settings).toContain("Seed after complete");
+
+    key(instance, "2");
+    await wait(30);
+    expect(instance.lastFrame() ?? "").toContain("Downloads");
+
+    key(instance, "1");
+    await wait(30);
+    expect(instance.lastFrame() ?? "").toContain("tornedo");
+  });
+
+  it("shows live source health in the sources view after a search", async () => {
+    const instance = render(<TornedoApp app={makeApp()} />);
+    await wait(30);
+    type(instance, "dune");
+    await wait(30);
+    key(instance, "\r");
+    await wait(80);
+
+    key(instance, "3");
+    await wait(30);
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("YTS");
+    expect(frame).toContain("healthy");
+    expect(frame).toContain("2 results");
+  });
+
+  it("shows the selected download as a queued card in the downloads view", async () => {
+    const app = makeApp();
+    const instance = render(<TornedoApp app={app} />);
+    await wait(30);
+    type(instance, "dune");
+    await wait(30);
+    key(instance, "\r");
+    await wait(80);
+    key(instance, "\r");
+    await wait(30);
+    key(instance, "\r");
+    await wait(30);
+
+    key(instance, "2");
+    await wait(30);
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("Dune");
+    expect(frame).toContain("queued");
+    expect((app.manager as unknown as FakeManager).items.length).toBe(1);
+  });
+
+  it("keeps recent searches on the home screen", async () => {
+    const instance = render(<TornedoApp app={makeApp()} />);
+    await wait(30);
+    type(instance, "dune");
+    await wait(30);
+    key(instance, "\r");
+    await wait(80);
+
+    key(instance, "1");
+    await wait(30);
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("recent searches");
+    expect(frame).toContain("dune");
+  });
+
+  it("help lists navigation and keybindings", async () => {
+    const instance = render(<TornedoApp app={makeApp()} />);
+    await wait(30);
+    key(instance, "?");
+    await wait(30);
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("TORNEDO");
+    expect(frame).toContain("navigation");
+    expect(frame).toContain("Keybindings");
+    expect(frame).toContain("search");
+    expect(frame).toContain("downloads");
+    expect(frame).toContain("settings");
   });
 });
