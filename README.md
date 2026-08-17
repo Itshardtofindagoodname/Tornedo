@@ -89,9 +89,9 @@ Common flags: `--json` (machine-readable output on stdout only), `--source <id>`
 | --- | --- |
 | `↑/k` `↓/j` | navigate |
 | `enter` / `d` | download selected |
-| `D` | download to a chosen directory (then `p`/`r`/`x`/`s`/`l`/`o` manage it) |
+| `D` | download to a chosen directory (then `p`/`r`/`x`/`s`/`m`/`o` manage it) |
 | `c` | category scope for the current results |
-| `o` | sort order for the current results |
+| `t` | sort order for the current results |
 | `ctrl+f` | refine the results with a filter (min/max size, source, resolution, codec, audio, language, quality) |
 | `i` | toggle details pane |
 | `/` | search again |
@@ -101,6 +101,7 @@ Common flags: `--json` (machine-readable output on stdout only), `--source <id>`
 | `s` | toggle seeding |
 | `m` | action menu for the selected download (cancel, delete files, open folder…) |
 | `y` | show selected magnet |
+| `o` | open selected magnet in your default handler |
 | `?` | help |
 | `q` | quit |
 

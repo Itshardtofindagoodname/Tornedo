@@ -12,7 +12,7 @@ import type { MediaCategory, Release } from "../model/search.js";
 import type { SourceErrorKind } from "../model/source.js";
 import type { ReleaseFilter, SortSpec } from "../results/filter.js";
 import { formatAudio } from "../media/audio.js";
-import { describeFilter, sortLabel } from "../results/filter.js";
+import { describeFilter, sortLabel, sortReleases } from "../results/filter.js";
 import { formatBytes } from "../utils/bytes.js";
 import { categoryColor, categoryTag, sourceGlyph, sourceHealthColor } from "./format.js";
 import { Spinner, EmptyState } from "./components.js";
@@ -36,13 +36,14 @@ export function filteredReleases(
   filter: string,
   releaseFilter: ReleaseFilter,
   categoryScope: MediaCategory | null,
+  sortSpec: SortSpec = { by: "score", dir: "desc" },
 ): Release[] {
   const releases = session?.releases() ?? [];
   const cat = categoryScope;
   const scope = releases.filter((r) => (cat === null ? true : r.category === cat));
   const ff = filter.toLowerCase();
   const text = ff ? scope.filter((r) => r.title.toLowerCase().includes(ff) || r.rawTitle.toLowerCase().includes(ff)) : scope;
-  return applyReleaseFilter(text, releaseFilter);
+  return sortReleases(applyReleaseFilter(text, releaseFilter), sortSpec);
 }
 
 function applyReleaseFilter(releases: Release[], f: ReleaseFilter): Release[] {
@@ -84,7 +85,7 @@ export function ResultsView({
   tick,
   wide,
 }: ResultsViewProps): React.ReactNode {
-  const releases = filteredReleases(session, filter, releaseFilter, categoryScope);
+  const releases = filteredReleases(session, filter, releaseFilter, categoryScope, sortSpec);
   const len = releases.length;
   const sel = Math.min(selected, Math.max(0, len - 1));
 
@@ -258,7 +259,7 @@ function ResultRow({
   wide: boolean;
 }): React.ReactNode {
   const md = release.metadata;
-  const size = formatBytes(release.size);
+  const size = release.size && release.size > 0 ? formatBytes(release.size) : "–";
   const seeds = release.seeders === undefined ? "–" : String(release.seeders);
   const peers = release.leechers === undefined ? "–" : String(release.leechers);
   const files = release.files === undefined ? "–" : String(release.files);

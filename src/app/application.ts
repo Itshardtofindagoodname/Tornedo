@@ -13,9 +13,14 @@ import { SearchEngine } from "../search/engine.js";
 import { dynamicSources } from "../sources/dynamic.js";
 import { SOURCES } from "../sources/registry.js";
 import type { TorrentClient } from "../torrent/client.js";
-import { WebTorrentClient } from "../torrent/webtorrent.js";
+import { LazyTorrentClient } from "../torrent/lazy.js";
 import { PUBLIC_TRACKERS } from "../torrent/parse.js";
 import { SearchService } from "./search-service.js";
+
+/** How many recent search queries are remembered (persisted across runs). */
+export const MAX_RECENT_SEARCHES = 8;
+
+const RECENT_SEARCHES_KEY = "search:recent";
 
 export interface ApplicationOptions {
   /** Skip loading persisted config (used by tests / `config init`). */
@@ -42,7 +47,16 @@ export class Application {
   private constructor(opts: ApplicationOptions) {
     this.db = opts.memoryDb ? openMemoryHandle() : openDatabase();
     this.store = new TorrentStore(this.db.db);
-    this.client = opts.client ?? new WebTorrentClient({ announce: [...PUBLIC_TRACKERS] });
+    // The torrent engine (WebTorrent: DHT, ports, NAT, trackers) costs seconds
+    // to construct and its module import alone is ~200ms. Build it lazily on
+    // first use (dynamic import included) so a search-only session starts
+    // instantly — the engine materializes the moment a torrent is queued.
+    this.client =
+      opts.client ??
+      new LazyTorrentClient(async () => {
+        const { WebTorrentClient } = await import("../torrent/webtorrent.js");
+        return new WebTorrentClient({ announce: [...PUBLIC_TRACKERS] });
+      });
     this.configState = defaultConfig();
     this.sources = SOURCES;
     this.healthSources = new Set(SOURCES.filter((s) => s.reportsHealth).map((s) => s.id));
@@ -128,6 +142,40 @@ export class Application {
     this.configState = await loadConfig();
     this.rebuildSources();
     this.manager.applyConfig();
+  }
+
+  // --- recent search history (persisted across sessions) ----------------------
+
+  private recentSearchesCache: readonly string[] | null = null;
+
+  /** Recent search queries, most recent first. Survives restarts (DB-backed). */
+  recentSearches(): readonly string[] {
+    if (this.recentSearchesCache !== null) return this.recentSearchesCache;
+    let list: string[] = [];
+    const raw = this.store.metaGet(RECENT_SEARCHES_KEY);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed)) {
+          list = parsed
+            .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
+            .slice(0, MAX_RECENT_SEARCHES);
+        }
+      } catch {
+        /* corrupted history — start fresh */
+      }
+    }
+    this.recentSearchesCache = list;
+    return this.recentSearchesCache;
+  }
+
+  /** Record a search query at the front of the persisted history. */
+  addRecentSearch(query: string): void {
+    const text = query.trim();
+    if (!text) return;
+    const next = [text, ...this.recentSearches().filter((x) => x !== text)].slice(0, MAX_RECENT_SEARCHES);
+    this.recentSearchesCache = next;
+    this.store.metaSet(RECENT_SEARCHES_KEY, JSON.stringify(next));
   }
 
   /** Close everything, preserving download state. Safe to call once. */

@@ -106,6 +106,7 @@ function makeApp(): Application {
     healthSources: new Set(["yts"]),
     getRank: () => defaultConfig().ranking,
   });
+  let recentQueries: string[] = [];
 
   return {
     searchService,
@@ -118,6 +119,10 @@ function makeApp(): Application {
     updateConfig: async () => {},
     reloadConfig: async () => {},
     suspend: async () => {},
+    recentSearches: () => recentQueries,
+    addRecentSearch: (q: string) => {
+      recentQueries = [q, ...recentQueries.filter((x) => x !== q)];
+    },
   } as unknown as Application;
 }
 
@@ -157,6 +162,46 @@ describe("TUI", () => {
     const frame = instance.lastFrame() ?? "";
     expect(frame).toContain("Dune");
     expect(frame).toContain("unique results");
+  });
+
+  it("types navigation-bound letters like j and k into the search box", async () => {
+    const instance = render(<TornedoApp app={makeApp()} />);
+    await wait(30);
+    type(instance, "jk");
+    await wait(30);
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("› jk");
+    // j/k are query text, not navigation: a search starting with them works.
+    key(instance, "\r");
+    await wait(80);
+    expect(instance.lastFrame() ?? "").toContain("unique results");
+  });
+
+  it("applies the chosen sort order to the results list", async () => {
+    const instance = render(<TornedoApp app={makeApp()} />);
+    await wait(30);
+    type(instance, "dune");
+    await wait(30);
+    key(instance, "\r");
+    await wait(80);
+
+    // Default "Best Match": the 1080p (50 seeds) release ranks first.
+    let frame = instance.lastFrame() ?? "";
+    expect(frame.indexOf("50 seeds")).toBeLessThan(frame.indexOf("5 seeds"));
+
+    key(instance, "t");
+    await wait(30);
+    key(instance, "\u001B[B");
+    await wait(30);
+    key(instance, "\u001B[B");
+    await wait(30);
+    key(instance, "\r");
+    await wait(30);
+
+    // "Low Seeds": the 5-seed release now comes first.
+    frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("Low Seeds");
+    expect(frame.indexOf("5 seeds")).toBeLessThan(frame.indexOf("50 seeds"));
   });
 
   it("navigates between downloads, help and back", async () => {
@@ -208,7 +253,7 @@ describe("TUI", () => {
     key(instance, "\r");
     await wait(80);
 
-    key(instance, "o");
+    key(instance, "t");
     await wait(30);
     expect(instance.lastFrame() ?? "").toContain("sort results");
 
@@ -335,6 +380,28 @@ describe("TUI", () => {
     const frame = instance.lastFrame() ?? "";
     expect(frame).toContain("recent searches");
     expect(frame).toContain("dune");
+  });
+
+  it("moves focus to recent searches with ↓ and quick-searches with enter", async () => {
+    const instance = render(<TornedoApp app={makeApp()} />);
+    await wait(30);
+    type(instance, "dune");
+    await wait(30);
+    key(instance, "\r");
+    await wait(80);
+
+    key(instance, "1");
+    await wait(30);
+    expect(instance.lastFrame() ?? "").toContain("recent searches");
+
+    key(instance, "\u001B[B");
+    await wait(30);
+    const focused = instance.lastFrame() ?? "";
+    expect(focused).toContain("› dune");
+
+    key(instance, "\r");
+    await wait(80);
+    expect(instance.lastFrame() ?? "").toContain("unique results");
   });
 
   it("help lists navigation and keybindings", async () => {

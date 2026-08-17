@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useWindowSize, type Key } from "ink";
 import { spawn } from "node:child_process";
 import type { Application } from "../app/application.js";
+import { MAX_RECENT_SEARCHES } from "../app/application.js";
 import type { SearchSession, SourceReport } from "../app/search-service.js";
 import type { KeyAction } from "../config/config.js";
 import { MEDIA_CATEGORIES, type MediaCategory } from "../model/search.js";
@@ -59,7 +60,6 @@ export interface TornedoAppProps {
 }
 
 const PAGE_STEP = 10;
-const MAX_RECENT = 5;
 
 export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   const { exit } = useApp();
@@ -70,8 +70,9 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   const [view, setView] = useState<View>("home");
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
-  const [recentQueries, setRecentQueries] = useState<string[]>([]);
+  const [recentQueries, setRecentQueries] = useState<string[]>(() => [...app.recentSearches()].slice(0, MAX_RECENT_SEARCHES));
   const [recentIndex, setRecentIndex] = useState(0);
+  const [recentActive, setRecentActive] = useState(false);
   const [selected, setSelected] = useState(0);
   const [selectedDownload, setSelectedDownload] = useState(0);
   const [sourcesSelected, setSourcesSelected] = useState(0);
@@ -120,13 +121,21 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
     setView(next);
   };
 
+  /** Return to the search home, clearing any recent-list focus. */
+  const goHome = (): void => {
+    setView("home");
+    setRecentActive(false);
+    setRecentIndex(0);
+    setCursor(query.length);
+  };
+
   const back = (): void => {
     switch (view) {
       case "home":
         exit();
         break;
       case "results":
-        setView("home");
+        goHome();
         break;
       case "details":
         setView("results");
@@ -156,9 +165,12 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
     setFilterText("");
     setSortOption(SORT_OPTIONS[0]!);
     setView("results");
+    setRecentActive(false);
+    setRecentIndex(0);
+    app.addRecentSearch(text);
     setRecentQueries((prev) => {
       const next = [text, ...prev.filter((x) => x !== text)];
-      return next.slice(0, MAX_RECENT);
+      return next.slice(0, MAX_RECENT_SEARCHES);
     });
   };
 
@@ -266,7 +278,7 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
 
   // --- downloads --------------------------------------------------------------
 
-  const currentReleases = (): ReturnType<typeof filteredReleases> => filteredReleases(session, filter, releaseFilter, categoryScope);
+  const currentReleases = (): ReturnType<typeof filteredReleases> => filteredReleases(session, filter, releaseFilter, categoryScope, sortOption.spec);
 
   const currentRelease = (): { rels: ReturnType<typeof filteredReleases>; index: number } | null => {
     const rels = currentReleases();
@@ -564,8 +576,7 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   const navigateAction = (action: KeyAction | null): boolean => {
     switch (action) {
       case "search":
-        setView("home");
-        setCursor(query.length);
+        goHome();
         return true;
       case "downloads":
         goto("downloads");
@@ -634,7 +645,7 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
         openMagnetSelected();
         break;
       case "back":
-        setView("home");
+        goHome();
         break;
       case "help":
         goto("help");
@@ -783,17 +794,38 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   };
 
   const handleHomeKey = (action: KeyAction | null, input: string, key: Key): void => {
-    const canBrowse = query.length === 0 && recentQueries.length > 0;
+    // The search box must never eat letters: j/k are bound to up/down for
+    // navigation elsewhere, but here they are query text.
+    if ((action === "up" || action === "down") && input && input.length === 1 && !key.ctrl && !key.meta) {
+      const next = applyTyping(query, cursor, input, key);
+      setQuery(next.value);
+      setCursor(next.cursor);
+      if (next.value !== query) {
+        setRecentIndex(0);
+        setRecentActive(false);
+      }
+      return;
+    }
+    const hasRecents = recentQueries.length > 0;
     switch (action) {
       case "up":
-        if (canBrowse) setRecentIndex((i) => Math.max(0, i - 1));
+        // Exit the recent list (back to the input) when the first entry is reached.
+        if (recentActive && recentIndex > 0) setRecentIndex((i) => i - 1);
+        else if (recentActive) setRecentActive(false);
         break;
       case "down":
-        if (canBrowse) setRecentIndex((i) => Math.min(recentQueries.length - 1, i + 1));
+        // ↓ drops focus onto the recent searches; repeated ↓ moves further down.
+        if (!hasRecents) break;
+        if (!recentActive) {
+          setRecentActive(true);
+          setRecentIndex(0);
+        } else {
+          setRecentIndex((i) => Math.min(recentQueries.length - 1, i + 1));
+        }
         break;
       case "confirm":
-        if (query.trim()) startSearch();
-        else if (canBrowse) startSearch(recentQueries[recentIndex]);
+        if (recentActive) startSearch(recentQueries[recentIndex]);
+        else if (query.trim()) startSearch();
         else showMessage("Type a query first.");
         break;
       case "help":
@@ -809,7 +841,10 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
         const next = applyTyping(query, cursor, input, key);
         setQuery(next.value);
         setCursor(next.cursor);
-        if (next.value !== query) setRecentIndex(0);
+        if (next.value !== query) {
+          setRecentIndex(0);
+          setRecentActive(false);
+        }
         break;
     }
   };
@@ -857,7 +892,7 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
     case "home":
       hints = [
         { keys: fk("confirm", "enter"), label: "search" },
-        { keys: "↑↓", label: "recent" },
+        { keys: "↓", label: "recent" },
         { keys: fk("help", "?"), label: "help" },
         { keys: "esc", label: "quit" },
       ];
@@ -953,6 +988,7 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
             cursor={cursor}
             recentSearches={recentQueries}
             recentIndex={recentIndex}
+            recentActive={recentActive}
             downloads={app.manager.list()}
             enabledSources={enabledSources}
             healthCounts={healthCounts}
@@ -994,7 +1030,7 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
       {overlay?.kind === "prompt" ? (
         <Modal title={overlay.title}>
           <SearchInput value={promptValue} cursor={promptCursor} prompt="›" />
-          <Box marginTop={1} width={58}>
+          <Box marginTop={1} width="100%">
             <Text dimColor wrap="truncate">{overlay.hint ?? "enter confirm · esc cancel"}</Text>
           </Box>
         </Modal>

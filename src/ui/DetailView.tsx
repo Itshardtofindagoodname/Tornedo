@@ -7,12 +7,14 @@
  */
 import { Box, Text } from "ink";
 import type { Application } from "../app/application.js";
+import type { KeyAction } from "../config/config.js";
 import type { Release } from "../model/search.js";
 import { formatAudio } from "../media/audio.js";
 import { formatBytes } from "../utils/bytes.js";
 import { formatDate, truncate } from "../utils/duration.js";
 import { categoryColor, categoryTag } from "./format.js";
 import { KeyValue, Separator } from "./components.js";
+import { firstKey } from "./keys.js";
 import { palette } from "./theme.js";
 
 export interface DetailViewProps {
@@ -25,6 +27,8 @@ export function DetailView({ app, release }: DetailViewProps): React.ReactNode {
   const sourceNames = new Map(app.sources.map((s) => [s.id, s.name]));
   const sources = release.sources.map((s) => sourceNames.get(s) ?? s).join(", ");
   const audio = formatAudio(md.audio);
+  const bindings = app.getConfig().keybindings;
+  const fk = (action: KeyAction, fallback: string): string => firstKey(bindings, action, fallback);
 
   const spec = [
     md.quality,
@@ -69,7 +73,7 @@ export function DetailView({ app, release }: DetailViewProps): React.ReactNode {
 
       <Box flexDirection="column" marginTop={1}>
         <Text color={palette.accentBright} bold>
-          {formatBytes(release.size)}
+          {release.size && release.size > 0 ? formatBytes(release.size) : "size unknown"}
         </Text>
         <Box height={1}>
           <Text color={palette.subtext}>
@@ -129,15 +133,15 @@ export function DetailView({ app, release }: DetailViewProps): React.ReactNode {
 
       <Box marginBottom={1}>
         <Text color={palette.dim}>
-          <Text color={palette.accent} bold>enter</Text> download
+          <Text color={palette.accent} bold>{fk("confirm", "enter")}</Text> download
           {"  "}
-          <Text color={palette.accent} bold>d</Text> download
+          <Text color={palette.accent} bold>{fk("download", "d")}</Text> download
           {"  "}
-          <Text color={palette.accent} bold>D</Text> download to…
+          <Text color={palette.accent} bold>{fk("downloadTo", "D")}</Text> download to…
           {"  "}
-          <Text color={palette.accent} bold>c</Text> copy magnet
+          <Text color={palette.accent} bold>{fk("copyMagnet", "y")}</Text> copy magnet
           {"  "}
-          <Text color={palette.accent} bold>o</Text> open magnet
+          <Text color={palette.accent} bold>{fk("openMagnet", "o")}</Text> open magnet
           {"  "}
           <Text color={palette.accent} bold>esc</Text> back
         </Text>

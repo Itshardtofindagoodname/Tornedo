@@ -14,8 +14,10 @@ export interface SearchHomeProps {
   query: string;
   cursor: number;
   recentSearches: readonly string[];
-  /** Selected recent search (only active while the query is empty). */
+  /** Selected recent search (only active while focus is on the recent list). */
   recentIndex: number;
+  /** True when ↓ has moved focus onto the recent-searches list. */
+  recentActive: boolean;
   downloads: readonly TorrentItem[];
   enabledSources: number;
   healthCounts: { healthy: number; degraded: number; unavailable: number };
@@ -28,13 +30,14 @@ export function SearchHome({
   cursor,
   recentSearches,
   recentIndex,
+  recentActive,
   downloads,
   enabledSources,
   healthCounts,
   activeDownloads,
   compact,
 }: SearchHomeProps): React.ReactNode {
-  const canBrowse = query.length === 0 && recentSearches.length > 0;
+  const canBrowse = recentActive && recentSearches.length > 0;
   const active = downloads.slice(0, 3);
 
   return (

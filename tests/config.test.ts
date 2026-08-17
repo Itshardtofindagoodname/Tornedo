@@ -98,4 +98,15 @@ describe("defaultKeybindings", () => {
     expect(kb.quit).toContain("q");
     expect(kb.downloadTo).toContain("shift+d");
   });
+
+  it("binds no key to more than one action", () => {
+    const kb = defaultKeybindings();
+    const seen = new Map<string, string>();
+    for (const [action, keys] of Object.entries(kb) as [string, string[]][]) {
+      for (const k of keys ?? []) {
+        expect(seen.has(k), `key "${k}" is bound to both "${seen.get(k)}" and "${action}"`).toBe(false);
+        seen.set(k, action);
+      }
+    }
+  });
 });

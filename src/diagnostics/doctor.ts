@@ -138,6 +138,9 @@ async function checkDiskSpace(dir: string, warningMb: number): Promise<DoctorChe
 async function checkEngine(app: Application): Promise<DoctorCheck> {
   const client = app.getClient();
   try {
+    // The engine is built lazily; a doctor probe must force it to materialize
+    // so the report reflects the real runtime, not an unstarted placeholder.
+    await (client as { load?: () => Promise<void> }).load?.();
     const stats = client.stats();
     const port = client.listenPort();
     const detail = `Engine "${client.kind}" responding (${stats.active} active, listening port ${port ?? "n/a"}).`;

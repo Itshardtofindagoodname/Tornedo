@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { Application } from "../src/app/application.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { Application, MAX_RECENT_SEARCHES } from "../src/app/application.js";
 import { defaultConfig } from "../src/config/config.js";
 
 describe("Application", () => {
@@ -31,5 +34,30 @@ describe("Application", () => {
     await app.updateConfig({ maxActiveDownloads: 9 });
     expect(app.getConfig().maxActiveDownloads).toBe(9);
     await app.suspend();
+  });
+
+  it("persists recent search history across restarts", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tornedo-history-"));
+    const prev = process.env.TORNEDO_STATE_DIR;
+    process.env.TORNEDO_STATE_DIR = dir;
+    try {
+      const first = await Application.create({ freshConfig: true });
+      expect(first.recentSearches()).toEqual([]);
+      first.addRecentSearch("dune");
+      first.addRecentSearch("inception");
+      first.addRecentSearch("dune"); // dedupes and moves to the front
+      expect([...first.recentSearches()]).toEqual(["dune", "inception"]);
+      await first.suspend();
+
+      const second = await Application.create({ freshConfig: true });
+      expect([...second.recentSearches()]).toEqual(["dune", "inception"]);
+      for (let i = 0; i < MAX_RECENT_SEARCHES + 3; i++) second.addRecentSearch(`q${i}`);
+      expect(second.recentSearches().length).toBeLessThanOrEqual(MAX_RECENT_SEARCHES);
+      await second.suspend();
+    } finally {
+      if (prev === undefined) delete process.env.TORNEDO_STATE_DIR;
+      else process.env.TORNEDO_STATE_DIR = prev;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

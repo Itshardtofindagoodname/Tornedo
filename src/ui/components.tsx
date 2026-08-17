@@ -5,7 +5,7 @@
  * keybinding and data decision lives in the App component.
  */
 import { useRef } from "react";
-import { Box, Text, useBoxMetrics, type DOMElement } from "ink";
+import { Box, Text, useBoxMetrics, useWindowSize, type DOMElement } from "ink";
 import type { ReactNode } from "react";
 import { palette, SPINNER_FRAMES } from "./theme.js";
 
@@ -139,12 +139,14 @@ export function Toast({ children }: { children: ReactNode }): ReactNode {
 
 // --- overlay -------------------------------------------------------------------
 
-export function Modal({ title, children }: { title: string; children: ReactNode }): ReactNode {
+export function Modal({ title, children, width = 64 }: { title: string; children: ReactNode; width?: number }): ReactNode {
+  const { columns } = useWindowSize();
+  const w = Math.max(24, Math.min(width, columns - 4));
   return (
     <Box position="absolute" top={0} left={0} width="100%" height="100%" alignItems="center" justifyContent="center">
       <Box
         flexDirection="column"
-        width={64}
+        width={w}
         borderStyle="round"
         borderColor={palette.border}
         backgroundColor={palette.surface}
@@ -154,7 +156,9 @@ export function Modal({ title, children }: { title: string; children: ReactNode 
         <Text bold color={palette.accent}>
           {title}
         </Text>
-        <Box marginTop={1}>{children}</Box>
+        <Box marginTop={1} width="100%">
+          {children}
+        </Box>
       </Box>
     </Box>
   );
@@ -170,11 +174,18 @@ export interface SearchInputProps {
   prompt?: string;
 }
 
-/** Renders a line of text with a block cursor at `cursor`. */
+/**
+ * Renders a single line of text with a block cursor at `cursor`. When the value
+ * is wider than the field, it scrolls a window around the cursor (with "…"
+ * markers) instead of wrapping, so long values like directory paths stay on one
+ * line and editing stays visually coherent.
+ */
 export function SearchInput({ value, cursor, placeholder, prompt = "›" }: SearchInputProps): ReactNode {
+  const ref = useRef<DOMElement | null>(null);
+  const { width } = useBoxMetrics(ref);
   if (value.length === 0) {
     return (
-      <Box flexGrow={1}>
+      <Box ref={ref} width="100%">
         <Text color={palette.accent} bold>
           {prompt}{" "}
         </Text>
@@ -186,16 +197,38 @@ export function SearchInput({ value, cursor, placeholder, prompt = "›" }: Sear
     );
   }
   const clamped = Math.min(Math.max(0, cursor), value.length);
+  const avail = width > 0 ? Math.max(1, width - prompt.length - 2) : 32;
   return (
-    <Box flexGrow={1}>
+    <Box ref={ref} width="100%">
       <Text color={palette.accent} bold>
         {prompt}{" "}
       </Text>
-      <Text>{value.slice(0, clamped)}</Text>
+      <WindowText value={value} cursor={clamped} avail={avail} />
+    </Box>
+  );
+}
+
+/** Single-line slice of `value` centered on `cursor`, no wrapping. */
+function WindowText({ value, cursor, avail }: { value: string; cursor: number; avail: number }): ReactNode {
+  const total = value.length;
+  let start = 0;
+  let end = total;
+  if (total > avail) {
+    const visible = Math.max(1, avail - 2);
+    start = Math.max(0, Math.min(cursor - Math.floor(visible / 2), total - visible));
+    end = start + visible;
+  }
+  const hasLeft = start > 0;
+  const hasRight = end < total;
+  return (
+    <Box flexGrow={1}>
+      {hasLeft ? <Text color={palette.dim}>…</Text> : null}
+      <Text>{value.slice(start, cursor)}</Text>
       <Text backgroundColor={palette.accent} color={palette.bg}>
-        {value[clamped] ?? " "}
+        {value[cursor] ?? " "}
       </Text>
-      <Text>{value.slice(clamped + 1)}</Text>
+      <Text>{value.slice(cursor + 1, end)}</Text>
+      {hasRight ? <Text color={palette.dim}>…</Text> : null}
     </Box>
   );
 }
@@ -328,14 +361,18 @@ export function SelectList<T extends string>({
   hint?: string;
 }): ReactNode {
   return (
-    <Modal title={title}>
-      <Box flexDirection="column" width={width - 6}>
+    <Modal title={title} width={width + 6}>
+      <Box flexDirection="column" width="100%">
         {options.map((opt, i) => (
-          <Box key={opt.value} backgroundColor={i === selected ? palette.accent : undefined}>
-            <Text color={i === selected ? palette.bg : palette.subtext}>
+          <Box key={opt.value} backgroundColor={i === selected ? palette.accent : undefined} paddingX={1}>
+            <Text color={i === selected ? palette.bg : palette.subtext} wrap="truncate">
               {i === selected ? "»" : " "} {opt.label}
             </Text>
-            {opt.hint ? <Text color={i === selected ? palette.bg : palette.faint}> — {opt.hint}</Text> : null}
+            {opt.hint ? (
+              <Text color={i === selected ? palette.bg : palette.faint} wrap="truncate">
+                {" "}— {opt.hint}
+              </Text>
+            ) : null}
           </Box>
         ))}
         {hint ? (
@@ -351,9 +388,9 @@ export function SelectList<T extends string>({
 /** Confirmation dialog. `yes` toggles the highlighted answer; App commits on confirm. */
 export function Confirm({ prompt, yes, width = 60 }: { prompt: string; yes: boolean; width?: number }): ReactNode {
   return (
-    <Modal title="confirm">
-      <Box flexDirection="column" width={width - 6}>
-        <Text color={palette.subtext}>{prompt}</Text>
+    <Modal title="confirm" width={width + 6}>
+      <Box flexDirection="column" width="100%">
+        <Text color={palette.subtext} wrap="truncate">{prompt}</Text>
         <Box marginTop={1}>
           <Box marginRight={2} backgroundColor={yes ? palette.accent : undefined}>
             <Text color={yes ? palette.bg : palette.subtext}> yes </Text>

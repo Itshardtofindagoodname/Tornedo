@@ -155,7 +155,7 @@ export function defaultKeybindings(): Partial<Record<KeyAction, string[]>> {
     toggleSeed: ["s"],
     filter: ["ctrl+f"],
     category: ["c"],
-    sort: ["o"],
+    sort: ["t"],
     menu: ["m"],
     copyMagnet: ["y"],
     openMagnet: ["o"],
