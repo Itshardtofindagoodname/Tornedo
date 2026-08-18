@@ -1,6 +1,6 @@
 {
   "name": "tornedo",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "Local-first, terminal-native, high-performance federated torrent search and download client.",
   "type": "module",
   "repository": {
