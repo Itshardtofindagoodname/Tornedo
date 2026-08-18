@@ -1,6 +1,6 @@
 {
   "name": "tornedo",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Local-first, terminal-native, high-performance federated torrent search and download client.",
   "type": "module",
   "repository": {
@@ -12,7 +12,7 @@
     "url": "https://github.com/Itshardtofindagoodname/Tornedo/issues"
   },
   "bin": {
-    "tornedo": "./dist/cli.js"
+    "tornedo": "dist/cli.js"
   },
   "main": "./dist/index.js",
   "exports": {
@@ -20,8 +20,8 @@
   },
   "files": [
     "dist",
-    "scripts/patch-webtorrent.mjs",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "NOTICE"
   ],
@@ -29,7 +29,6 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "postinstall": "node scripts/patch-webtorrent.mjs",
     "prepack": "npm run build",
     "dev": "tsx src/cli.ts",
     "build": "tsc -p tsconfig.build.json",
@@ -59,7 +58,7 @@
     "ink": "^7.1.1",
     "parse-torrent": "^11.0.24",
     "react": "^19.2.8",
-    "webtorrent": "^2.4.1"
+    "webtorrent": "^3.0.21"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
@@ -69,5 +68,14 @@
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
     "vitest": "^4.0.0"
+  },
+  "allowScripts": {
+    "better-sqlite3": true,
+    "bufferutil": true,
+    "esbuild": true,
+    "ip-set": true,
+    "node-datachannel": true,
+    "utf-8-validate": true,
+    "utp-native": true
   }
 }

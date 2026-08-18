@@ -66,6 +66,20 @@ tornedo --help        # usage
 tornedo search "dune" # one federated search, every source
 ```
 
+> **npm 11.16+ / npm 12 (`allowScripts`).** Recent npm releases require install
+> scripts (native addon builds, etc.) to be explicitly approved. `tornedo` ships
+> **no install scripts of its own**, but it depends on third-party native
+> packages (`better-sqlite3`, and WebTorrent's optional WebRTC/uTP/WebSocket
+> addons). If your npm prints an `install-scripts` warning on a fresh install,
+> approve the packages once with:
+>
+> ```sh
+> npm install -g tornedo --allow-scripts=better-sqlite3,bufferutil,utf-8-validate,node-datachannel,utp-native
+> ```
+>
+> or persist the allowlist with `npm install-scripts approve <pkg>` inside a
+> project. Everything runs on TCP even if the optional addons are skipped.
+
 ### Build from source (developers)
 
 ```sh
@@ -81,7 +95,7 @@ publishing, pack and install it:
 
 ```sh
 npm pack
-npm install -g ./tornedo-0.2.0.tgz
+npm install -g ./tornedo-1.1.0.tgz
 ```
 
 ## Commands
