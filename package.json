@@ -1,8 +1,16 @@
 {
   "name": "tornedo",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local-first, terminal-native, high-performance federated torrent search and download client.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Itshardtofindagoodname/Tornedo.git"
+  },
+  "homepage": "https://github.com/Itshardtofindagoodname/Tornedo#readme",
+  "bugs": {
+    "url": "https://github.com/Itshardtofindagoodname/Tornedo/issues"
+  },
   "bin": {
     "tornedo": "./dist/cli.js"
   },
@@ -12,6 +20,7 @@
   },
   "files": [
     "dist",
+    "scripts/patch-webtorrent.mjs",
     "README.md",
     "LICENSE",
     "NOTICE"
@@ -21,6 +30,7 @@
   },
   "scripts": {
     "postinstall": "node scripts/patch-webtorrent.mjs",
+    "prepack": "npm run build",
     "dev": "tsx src/cli.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/cli.js",

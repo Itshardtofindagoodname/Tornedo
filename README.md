@@ -48,17 +48,41 @@ tornedo                        # terminal UI
 - **Private by design** — no accounts, no tracking, no analytics. Config and
   database live on your machine.
 
-## Install & build
+## Install
 
 Requires Node.js >= 22.
 
+Install the CLI globally from npm:
+
 ```sh
+npm install -g tornedo
+```
+
+The `tornedo` command is then available in any directory:
+
+```sh
+tornedo               # terminal UI
+tornedo --help        # usage
+tornedo search "dune" # one federated search, every source
+```
+
+### Build from source (developers)
+
+```sh
+git clone https://github.com/Itshardtofindagoodname/Tornedo.git
+cd Tornedo
 npm install
 npm run build        # compiles TypeScript to dist/
 npm run dev -- search "dune"   # run from source without building
 ```
 
-The CLI entry point is `dist/cli.js`; `npm link` exposes the `tornedo` command.
+The CLI entry point is `dist/cli.js`. To test the built package locally without
+publishing, pack and install it:
+
+```sh
+npm pack
+npm install -g ./tornedo-0.2.0.tgz
+```
 
 ## Commands
 
