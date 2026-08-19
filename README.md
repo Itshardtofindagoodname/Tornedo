@@ -1,5 +1,7 @@
 # tornedo
 
+[![CI](https://github.com/Itshardtofindagoodname/Tornedo/actions/workflows/ci.yml/badge.svg)](https://github.com/Itshardtofindagoodname/Tornedo/actions/workflows/ci.yml)
+
 Local-first, terminal-native, federated torrent **search** and **download** client.
 
 Search many torrent sites at once, get one clean, ranked, de-duplicated result
