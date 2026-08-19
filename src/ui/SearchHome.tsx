@@ -3,12 +3,13 @@
  * recent searches from this session, and a live snapshot of the download
  * queue. All input handling lives in App; this stays presentational.
  */
-import { Box, Text } from "ink";
+import { Box, Text, useWindowSize } from "ink";
 import type { TorrentItem } from "../model/torrent.js";
 import { SearchInput } from "./components.js";
 import { palette } from "./theme.js";
 import { downloadState, stateLabel } from "./state.js";
 import { stateColor, stateGlyph } from "./format.js";
+import { scrollWindow } from "./text.js";
 
 export interface SearchHomeProps {
   query: string;
@@ -40,6 +41,32 @@ export function SearchHome({
   const canBrowse = recentActive && recentSearches.length > 0;
   const active = downloads.slice(0, 3);
 
+  // Keep the stacked lists inside the terminal height. Ink mis-renders content
+  // that overflows a fixed-height container as overlapping rows, so the number
+  // of visible recent searches and activity rows is clamped to what actually
+  // fits (recents get priority; the recent window scrolls to keep the highlight
+  // visible). A normal-size terminal shows everything.
+  const { rows } = useWindowSize();
+  const heroRows = compact ? 10 : 15;
+  const listBudget = Math.max(0, (rows || 24) - 5 - heroRows);
+  const showRecents = recentSearches.length > 0;
+  const showActivity = active.length > 0;
+  const sectionCount = (showRecents ? 1 : 0) + (showActivity ? 1 : 0);
+  const tight = listBudget < 14;
+  const listMargin = tight ? 2 : 4;
+  const itemRows = Math.max(0, listBudget - sectionCount * (listMargin + 1));
+  const recentSlots = showRecents ? Math.min(recentSearches.length, itemRows) : 0;
+  const activitySlots = showActivity
+    ? Math.min(active.length, Math.max(0, itemRows - recentSlots))
+    : 0;
+  const { start: recentStart, count: recentCount } = scrollWindow(
+    recentActive ? recentIndex : 0,
+    Math.max(1, recentSlots),
+    recentSearches.length,
+  );
+  const recentWindow = recentSearches.slice(recentStart, recentStart + recentCount);
+  const activeWindow = active.slice(0, activitySlots);
+
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={2}>
       <Box height={compact ? 1 : 3} />
@@ -65,28 +92,36 @@ export function SearchHome({
         </Box>
       </Box>
 
-      {recentSearches.length > 0 ? (
-        <Box flexDirection="column" marginTop={compact ? 2 : 4} paddingX={4}>
+      {showRecents && recentWindow.length > 0 ? (
+        <Box flexDirection="column" marginTop={listMargin} paddingX={4}>
           <Text color={palette.faint}>recent searches</Text>
-          {recentSearches.map((q, i) => (
-            <Box key={q} height={1} width="100%">
-              <Text color={canBrowse && i === recentIndex ? palette.accent : palette.faint} bold={canBrowse && i === recentIndex}>
-                {canBrowse && i === recentIndex ? "› " : "  "}
-              </Text>
-              <Box flexGrow={1}>
-                <Text color={canBrowse && i === recentIndex ? palette.text : palette.dim} wrap="truncate">
-                  {q}
+          {recentWindow.map((q, i) => {
+            const idx = recentStart + i;
+            return (
+              <Box key={q} height={1} width="100%">
+                <Text color={canBrowse && idx === recentIndex ? palette.accent : palette.faint} bold={canBrowse && idx === recentIndex}>
+                  {canBrowse && idx === recentIndex ? "› " : "  "}
                 </Text>
+                <Box flexGrow={1}>
+                  <Text color={canBrowse && idx === recentIndex ? palette.text : palette.dim} wrap="truncate">
+                    {q}
+                  </Text>
+                </Box>
               </Box>
+            );
+          })}
+          {recentWindow.length < recentSearches.length ? (
+            <Box height={1}>
+              <Text color={palette.faint}>↑↓ browse · {recentStart + 1}–{recentStart + recentWindow.length} of {recentSearches.length}</Text>
             </Box>
-          ))}
+          ) : null}
         </Box>
       ) : null}
 
-      {active.length > 0 ? (
-        <Box flexDirection="column" marginTop={compact ? 2 : 4} paddingX={4}>
+      {showActivity && activeWindow.length > 0 ? (
+        <Box flexDirection="column" marginTop={listMargin} paddingX={4}>
           <Text color={palette.faint}>recent activity</Text>
-          {active.map((item) => {
+          {activeWindow.map((item) => {
             const state = downloadState(item);
             return (
               <Box key={item.id} height={1}>

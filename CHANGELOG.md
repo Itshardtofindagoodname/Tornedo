@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented in this file.
 
+## [3.2.0] - 2026-08-20
+
+### File selection, clarified keys
+
+- **`enter` is now the single download key.** It no longer competes with `d`:
+  in the details inspector `enter` commits the download of the checked files;
+  the redundant `d`-download shortcut was removed.
+- **`d` now toggles the highlighted file** for download everywhere a file list
+  appears (the details inspector). It is no longer bound to "download".
+- **The file list moved to a right-hand panel** of the details inspector and
+  lists as many files as fit at once, scrolling to keep the highlighted file in
+  view. Every file is still checked by default (`a` all · `n` none ·
+  `d`/`space` toggle, `✓` = selected).
+- Keybinding definitions, on-screen help and the README were updated to match
+  (`enter` download · `d` toggle file).
+
+### Chores
+
+- Bumped the published version to 3.2.0 (and re-synced `tornedo --version`).
+
 ## [3.0.0] - 2026-08-20
 
 ### File selection, redesigned

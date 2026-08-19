@@ -135,12 +135,13 @@ Common flags: `--json` (machine-readable output on stdout only), `--source <id>`
 | Key | Action |
 | --- | --- |
 | `↑/k` `↓/j` | navigate |
-| `enter` / `d` | download selected |
+| `enter` | download — in the details inspector it commits the checked files |
+| `d` | toggle the highlighted file for download (details file panel) |
 | `D` | download to a chosen directory (then `p`/`r`/`x`/`s`/`m`/`o` manage it) |
 | `c` | category scope for the current results |
 | `t` | sort order for the current results |
 | `ctrl+f` | refine the results with a filter (min/max size, source, resolution, codec, audio, language, quality) |
-| `i` | details inspector — files are selected there (`space` toggle · `a` all · `n` none · `enter`/`d` download · `esc` back) |
+| `i` | details inspector — the file list sits in a right-hand panel, every file checked by default (`d`/`space` toggle · `a` all · `n` none · `enter` download · `esc` back) |
 | `/` | search again |
 | `v` | downloads view |
 | `p` / `r` | pause / resume selected download |

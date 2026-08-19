@@ -124,7 +124,11 @@ export interface TornedoConfig {
   seedAfterComplete: boolean;
   ranking: RankingConfig;
   theme: string;
-  /** action -> list of key names (see src/ui/keys.ts). */
+  /**
+   * action -> list of key names (see src/ui/keys.ts). `confirm` (enter) is the
+   * download key; `download` (d) toggles a file for download in the details
+   * file panel.
+   */
   keybindings: Partial<Record<KeyAction, string[]>>;
   /** Watch-mode poll interval in ms. */
   watchIntervalMs: number;
@@ -146,7 +150,10 @@ export function defaultKeybindings(): Partial<Record<KeyAction, string[]>> {
     pagedown: ["pagedown"],
     home: ["home"],
     end: ["end"],
+    // enter is the app-wide download key: in the details inspector it commits
+    // the download of the checked files.
     confirm: ["enter"],
+    // d toggles the highlighted file for download (details file panel).
     download: ["d"],
     downloadTo: ["shift+d"],
     pause: ["p"],

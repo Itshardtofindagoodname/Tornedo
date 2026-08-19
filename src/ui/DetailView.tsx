@@ -3,14 +3,17 @@
  * the results list. Everything shown comes from the real release (parsed
  * metadata, swarm counts, sources, magnet).
  *
- * File selection lives here as a DEFAULT part of the view (no separate
- * keybind): as soon as the release is opened, its torrent metadata is resolved
- * and the real file list is shown as a checkbox list. The user toggles
- * individual files with space and commits with enter/d — only the selected
- * files are downloaded. Until metadata is resolved the section shows a live
- * "resolving" state; a direct-download source simply has no file list.
+ * File selection lives in the RIGHT-HAND panel as a DEFAULT part of the view
+ * (no separate keybind): as soon as the release is opened, its torrent metadata
+ * is resolved and the file list is shown as a checkbox panel — every file
+ * checked by default. The panel lists all files at once when they fit and
+ * scrolls to keep the highlighted file in view. `d` (or space) toggles the
+ * highlighted file; `enter` is the single download key and commits the
+ * selection. Until metadata is resolved the panel shows a live "resolving"
+ * state; a direct-download source simply has no file list.
  */
-import { Box, Text, useWindowSize } from "ink";
+import { useRef } from "react";
+import { Box, Text, useBoxMetrics, useWindowSize, type DOMElement } from "ink";
 import type { Application } from "../app/application.js";
 import type { KeyAction } from "../config/config.js";
 import type { Release } from "../model/search.js";
@@ -50,6 +53,7 @@ export function DetailView({
   onSelectNone,
 }: DetailViewProps): React.ReactNode {
   const md = release.metadata;
+  const { columns } = useWindowSize();
   const sourceNames = new Map(app.sources.map((s) => [s.id, s.name]));
   const sources = release.sources.map((s) => sourceNames.get(s) ?? s).join(", ");
   const audio = formatAudio(md.audio);
@@ -88,6 +92,10 @@ export function DetailView({
   if (md.album) tags.push(`album ${md.album}`);
   if (md.track) tags.push(`track ${md.track}`);
 
+  const filePanelWidth = Math.max(36, Math.floor((columns || 80) * 0.46));
+  const panelRef = useRef<DOMElement | null>(null);
+  const panelMetrics = useBoxMetrics(panelRef);
+
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={2} paddingTop={1}>
       <Text color={palette.dim}>← search results</Text>
@@ -101,95 +109,92 @@ export function DetailView({
         <Separator />
       </Box>
 
-      <Box flexDirection="column" marginTop={1}>
-        <Text color={palette.accentBright} bold>
-          {release.size && release.size > 0 ? formatBytes(release.size) : "size unknown"}
-        </Text>
-        <Box height={1}>
-          <Text color={palette.subtext}>
-            {release.seeders ?? "–"} seeds · {release.leechers ?? "–"} peers · {release.files ?? "–"} files
+      <Box flexDirection="row" flexGrow={1} marginTop={1}>
+        <Box flexDirection="column" flexGrow={1} paddingRight={2}>
+          <Text color={palette.accentBright} bold>
+            {release.size && release.size > 0 ? formatBytes(release.size) : "size unknown"}
           </Text>
-        </Box>
-        <Box height={1}>
-          <Text color={palette.subtext}>
-            {release.sources.length} source{release.sources.length === 1 ? "" : "s"}
-          </Text>
-        </Box>
-      </Box>
+          <Box height={1}>
+            <Text color={palette.subtext}>
+              {release.seeders ?? "–"} seeds · {release.leechers ?? "–"} peers · {release.files ?? "–"} files
+            </Text>
+          </Box>
+          <Box height={1}>
+            <Text color={palette.subtext}>
+              {release.sources.length} source{release.sources.length === 1 ? "" : "s"}
+            </Text>
+          </Box>
 
-      <Box marginTop={1}>
-        <Separator />
-      </Box>
+          <Box marginTop={1}>
+            <Separator />
+          </Box>
 
-      <Box flexDirection="column" marginTop={1}>
-        {spec ? (
-          <KeyValue label="specs" value={truncate(spec, 120)} valueColor={palette.text} />
-        ) : null}
-        {tags.length > 0 ? (
-          <KeyValue label="tags" value={truncate(tags.join("  ·  "), 120)} valueColor={palette.text} />
-        ) : null}
-        {release.category ? (
-          <KeyValue
-            label="category"
-            value={
-              <Text color={categoryColor(release.category)}>
-                {categoryTag(release.category).trim()} {release.category}
+          <Box flexDirection="column" marginTop={1}>
+            {spec ? (
+              <KeyValue label="specs" value={truncate(spec, 120)} valueColor={palette.text} />
+            ) : null}
+            {tags.length > 0 ? (
+              <KeyValue label="tags" value={truncate(tags.join("  ·  "), 120)} valueColor={palette.text} />
+            ) : null}
+            {release.category ? (
+              <KeyValue
+                label="category"
+                value={
+                  <Text color={categoryColor(release.category)}>
+                    {categoryTag(release.category).trim()} {release.category}
+                  </Text>
+                }
+                valueColor={palette.text}
+              />
+            ) : null}
+            <KeyValue label="sources" value={truncate(sources, 120)} valueColor={palette.text} />
+            <KeyValue label="infohash" value={truncate(release.infohash, 24)} valueColor={palette.dim} />
+            <KeyValue label="magnet" value={truncate(release.magnet, 120)} valueColor={palette.dim} />
+            {release.added ? (
+              <KeyValue label="added" value={formatDate(release.added)} valueColor={palette.subtext} />
+            ) : null}
+          </Box>
+        </Box>
+
+        <Box ref={panelRef} flexDirection="column" width={filePanelWidth} paddingLeft={1} overflow="hidden">
+          <Text color={palette.faint}>files</Text>
+          {fileItem === null ? (
+            <Box height={1} marginTop={1}>
+              <Text color={palette.faint} wrap="truncate">
+                {release.files ?? "?"} file{release.files === 1 ? "" : "s"} — a direct-download source has no torrent file list.
               </Text>
-            }
-            valueColor={palette.text}
-          />
-        ) : null}
-        <KeyValue label="sources" value={truncate(sources, 120)} valueColor={palette.text} />
-        <KeyValue label="infohash" value={truncate(release.infohash, 24)} valueColor={palette.dim} />
-        <KeyValue label="magnet" value={truncate(release.magnet, 120)} valueColor={palette.dim} />
-        {release.added ? (
-          <KeyValue label="added" value={formatDate(release.added)} valueColor={palette.subtext} />
-        ) : null}
+            </Box>
+          ) : failed ? (
+            <Box height={1} marginTop={1}>
+              <Text color={palette.red} wrap="truncate">
+                ⚠ could not resolve files: {truncate(fileItem.error ?? "unknown error", 100)}
+              </Text>
+            </Box>
+          ) : resolving ? (
+            <Box height={1} marginTop={1}>
+              <Text color={palette.dim}>
+                <Spinner tick={tick} /> resolving file list — nothing will download until you commit.
+              </Text>
+            </Box>
+          ) : (
+            <FileRows
+              files={files}
+              checks={fileChecks}
+              cursor={fileCursor}
+              rowSlots={Math.max(1, Math.min(files.length, (panelMetrics.height || 1) - 7))}
+              onToggleFile={onToggleFile}
+              onSelectAll={onSelectAll}
+              onSelectNone={onSelectNone}
+            />
+          )}
+        </Box>
       </Box>
-
-      <Box marginTop={1}>
-        <Separator />
-      </Box>
-
-      <Box flexDirection="column" marginTop={1}>
-        <Text color={palette.faint}>files</Text>
-        {fileItem === null ? (
-          <Box height={1} marginTop={1}>
-            <Text color={palette.faint} wrap="truncate">
-              {release.files ?? "?"} file{release.files === 1 ? "" : "s"} — a direct-download source has no torrent file list.
-            </Text>
-          </Box>
-        ) : failed ? (
-          <Box height={1} marginTop={1}>
-            <Text color={palette.red} wrap="truncate">
-              ⚠ could not resolve files: {truncate(fileItem.error ?? "unknown error", 100)}
-            </Text>
-          </Box>
-        ) : resolving ? (
-          <Box height={1} marginTop={1}>
-            <Text color={palette.dim}>
-              <Spinner tick={tick} /> resolving file list — nothing will download until you commit.
-            </Text>
-          </Box>
-        ) : (
-          <FileRows
-            files={files}
-            checks={fileChecks}
-            cursor={fileCursor}
-            onToggleFile={onToggleFile}
-            onSelectAll={onSelectAll}
-            onSelectNone={onSelectNone}
-          />
-        )}
-      </Box>
-
-      <Box flexGrow={1} />
 
       <Box marginBottom={1}>
         <Text color={palette.dim}>
-          <Text color={palette.accent} bold>{fk("confirm", "enter")}</Text> download{files.length > 0 ? " selected files" : ""}
+          <Text color={palette.accent} bold>{fk("confirm", "enter")}</Text> download
           {"  "}
-          <Text color={palette.accent} bold>{fk("download", "d")}</Text> download
+          <Text color={palette.accent} bold>{fk("download", "d")}</Text> toggle file
           {"  "}
           <Text color={palette.accent} bold>{fk("downloadTo", "D")}</Text> download to…
           {"  "}
@@ -205,13 +210,17 @@ export function DetailView({
 }
 
 /**
- * Checkbox list of the torrent's files. Scrolls a window around the cursor so
- * long lists fit the terminal. App owns the cursor/selection state and the keys.
+ * Checkbox list of the torrent's files, shown in the right-hand panel. Every
+ * file is checked by default; the list fills the terminal (all files at once
+ * when they fit) and scrolls a window around the cursor so the highlight is
+ * never pushed off-screen. `d`/`space` toggle, `a` all, `n` none, `enter`
+ * downloads.
  */
 function FileRows({
   files,
   checks,
   cursor,
+  rowSlots,
   onToggleFile,
   onSelectAll,
   onSelectNone,
@@ -219,14 +228,19 @@ function FileRows({
   files: readonly TorrentFileInfo[];
   checks: ReadonlySet<string>;
   cursor: number;
+  /** Number of file rows the panel can display. */
+  rowSlots: number;
   onToggleFile: (path: string) => void;
   onSelectAll: () => void;
   onSelectNone: () => void;
 }): React.ReactNode {
-  const { rows } = useWindowSize();
-  const maxRows = Math.max(3, Math.min(12, rows - 22));
   const clamped = Math.min(Math.max(0, cursor), Math.max(0, files.length - 1));
-  const { start, count } = scrollWindow(clamped, maxRows, files.length);
+  // The panel height (measured from the rendered box) minus the chrome above
+  // and below the rows: "files" header, count line, margins, scroll hint and
+  // keybind hint. Keeping the rendered rows inside this budget stops rows from
+  // overflowing the panel, which Ink mis-renders as overlapping lines.
+  const rowCount = Math.max(1, Math.floor(rowSlots));
+  const { start, count } = scrollWindow(clamped, rowCount, files.length);
   const visible = files.slice(start, start + count);
   const total = files.reduce((sum, f) => sum + (f.length || 0), 0);
   return (
@@ -242,7 +256,7 @@ function FileRows({
           return (
             <Box key={f.path} height={1} backgroundColor={isCursor ? palette.accent : undefined} paddingX={1}>
               <Text color={isCursor ? palette.bg : palette.subtext} wrap="truncate">
-                {isCursor ? "»" : " "} [{checked ? "x" : " "}] {f.path}
+                {isCursor ? "»" : " "} [{checked ? "✓" : " "}] {f.path}
               </Text>
               <Text color={isCursor ? palette.bg : palette.faint}>
                 {" "} {formatBytes(f.length)}
@@ -251,13 +265,13 @@ function FileRows({
           );
         })}
       </Box>
-      {files.length > maxRows ? (
-        <Box marginTop={1}>
+      {files.length > count ? (
+        <Box height={1} marginTop={1}>
           <Text color={palette.faint}>↑↓ scroll · {start + 1}–{Math.min(start + count, files.length)} of {files.length}</Text>
         </Box>
       ) : null}
       <Box height={1} marginTop={1}>
-        <Text color={palette.faint}>space toggle · a all · n none · ↑↓ move · enter/d download</Text>
+        <Text color={palette.faint}>d/space toggle · a all · n none · ↑↓ move · enter download</Text>
       </Box>
     </Box>
   );

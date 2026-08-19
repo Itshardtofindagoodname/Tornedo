@@ -361,7 +361,14 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
       fileChecksInitId.current = existing.id;
       setDetailsFilesId(existing.id);
       setDetailsFilesCreated(false);
-      setFileChecks(new Set(existing.fileList.map((f) => f.path)));
+      // Reflect the actual selection when the torrent already has one (e.g. a
+      // download in progress): show only the chosen files checked, not every
+      // file. A fresh torrent has no selection yet and defaults to all checked.
+      setFileChecks(
+        existing.selectedFiles && existing.selectedFiles.length > 0
+          ? new Set(existing.selectedFiles)
+          : new Set(existing.fileList.map((f) => f.path)),
+      );
       setFileCursor(0);
       return;
     }
@@ -379,7 +386,10 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
       startDeselected: true,
     });
     const known = item.fileList && item.fileList.length > 0;
-    fileChecksInitId.current = item.id;
+    // Only mark the selection as initialized when the file list is already
+    // known. Otherwise the tick-effect below initializes "all checked" the
+    // moment metadata arrives, so the user never sees an empty (wrong) default.
+    fileChecksInitId.current = known ? item.id : null;
     setDetailsFilesId(item.id);
     setDetailsFilesCreated(!known);
     setFileChecks(known ? new Set(item.fileList!.map((f) => f.path)) : new Set());
@@ -775,9 +785,6 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
       case "confirm":
         if (cur) goto("details");
         break;
-      case "download":
-        downloadSelected();
-        break;
       case "downloadTo":
         openPrompt("download to", app.getConfig().downloadDir, (dir) => {
           if (dir.trim()) downloadSelected(dir.trim());
@@ -827,9 +834,16 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
         setFileCursor((i) => Math.min(last, i + PAGE_STEP));
         break;
       case "confirm":
-      case "download":
         void commitDetailsDownload();
         break;
+      case "download": {
+        // d toggles the highlighted file for download — enter is the download key.
+        if (files.length > 0) {
+          const cur = files[Math.min(fileCursor, last)];
+          if (cur) toggleFile(cur.path);
+        }
+        break;
+      }
       case "downloadTo":
         openPrompt("download to", app.getConfig().downloadDir, (dir) => {
           if (dir.trim()) void commitDetailsDownload(dir.trim());
@@ -1078,7 +1092,6 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
     case "results":
       hints = [
         { keys: fk("confirm", "enter"), label: "open" },
-        { keys: fk("download", "d"), label: "download" },
         { keys: fk("search", "/"), label: "search" },
         { keys: fk("downloads", "2"), label: "downloads" },
         { keys: fk("help", "?"), label: "help" },
@@ -1087,6 +1100,7 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
     case "details":
       hints = [
         { keys: fk("confirm", "enter"), label: "download" },
+        { keys: fk("download", "d"), label: "toggle file" },
         { keys: fk("downloadTo", "D"), label: "download to" },
         { keys: fk("copyMagnet", "y"), label: "copy magnet" },
         { keys: "esc", label: "back" },

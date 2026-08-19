@@ -438,16 +438,40 @@ export class WebTorrentClient implements TorrentClient {
     if (files.length === 0) return;
     const matches = files.filter((f) => wanted.has(f.path));
     if (matches.length === 0) {
+      // Nothing matched: fall back to selecting every file so the torrent never
+      // sits fully deselected (which would download nothing and never complete).
       this.selectedPaths.delete(id);
       this.handlers.get(id)?.onWarning(id, `no files matched the selection — downloading the whole torrent`);
+      for (const f of files) {
+        if (f.length === 0) continue;
+        try {
+          f.select();
+        } catch {
+          /* noop */
+        }
+      }
       return;
     }
     const selected = new Set(matches.map((f) => f.path));
+    // Deselect every unwanted file FIRST, then select the wanted files. Order
+    // matters: WebTorrent's selection set subtracts a deselect range from any
+    // overlapping selection, so deselecting a neighbour AFTER selecting a file
+    // would strip the shared boundary piece from the wanted file — that piece
+    // then never downloads and the subset stalls at ~99%. Selecting last
+    // re-establishes the wanted file's full piece range (shared pieces are
+    // fetched in full, which is standard torrent behaviour).
     for (const f of files) {
-      if (f.length === 0) continue;
+      if (f.length === 0 || selected.has(f.path)) continue;
       try {
-        if (selected.has(f.path)) f.select();
-        else f.deselect();
+        f.deselect();
+      } catch {
+        /* noop */
+      }
+    }
+    for (const f of files) {
+      if (f.length === 0 || !selected.has(f.path)) continue;
+      try {
+        f.select();
       } catch {
         /* noop */
       }

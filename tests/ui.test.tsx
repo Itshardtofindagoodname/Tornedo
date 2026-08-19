@@ -83,6 +83,10 @@ class FakeManager extends EventEmitter {
   resume(): void {}
   toggleSeeding(): void {}
   cancel(): void {}
+  setFileSelection(id: string, paths: string[]): void {
+    const item = this.get(id);
+    if (item) item.selectedFiles = paths;
+  }
   openLocation(): boolean {
     return false;
   }
@@ -247,6 +251,71 @@ describe("TUI", () => {
     const frame = instance.lastFrame() ?? "";
     expect(frame).toContain("Queued");
     expect((app.manager as unknown as FakeManager).items.length).toBe(1);
+  });
+
+  it("uses d to toggle files, not download, in the details inspector", async () => {
+    const app = makeApp();
+    const instance = render(<TornedoApp app={app} />);
+    await wait(30);
+    type(instance, "dune");
+    await wait(30);
+    key(instance, "\r");
+    await wait(80);
+
+    key(instance, "\r");
+    await wait(30);
+    const opened = instance.lastFrame() ?? "";
+    expect(opened).toContain("← search results");
+    expect(opened).toContain("toggle file");
+
+    key(instance, "d");
+    await wait(30);
+    const frame = instance.lastFrame() ?? "";
+    // d no longer downloads: still in the inspector, nothing queued.
+    expect(frame).toContain("← search results");
+    expect(frame).not.toContain("Queued");
+    expect(frame).not.toContain("Downloading");
+  });
+
+  it("shows files checked by default and d toggles only the highlighted file", async () => {
+    const app = makeApp();
+    const manager = app.manager as unknown as FakeManager;
+    const realAdd = manager.add.bind(manager);
+    manager.add = ((input) => {
+      const item = realAdd(input);
+      item.fileList = [
+        { path: "Dune.2021.1080p.mkv", length: 2_000_000_000 },
+        { path: "subs/en.srt", length: 20_000 },
+      ];
+      return item;
+    }) as FakeManager["add"];
+
+    const instance = render(<TornedoApp app={app} />);
+    await wait(30);
+    type(instance, "dune");
+    await wait(30);
+    key(instance, "\r");
+    await wait(80);
+    key(instance, "\r");
+    await wait(30);
+
+    const opened = instance.lastFrame() ?? "";
+    expect(opened).toContain("2 files");
+    expect(opened).toContain("2 selected");
+    expect(opened).toContain("✓");
+
+    key(instance, "\u001B[B"); // move the cursor onto the second file
+    await wait(30);
+    key(instance, "d"); // toggle it off
+    await wait(30);
+    expect(instance.lastFrame() ?? "").toContain("1 selected");
+
+    key(instance, "\r"); // download only the checked subset
+    await wait(30);
+    const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("Downloading 1 of 2 files.");
+    expect((app.manager as unknown as FakeManager).items.length).toBe(1);
+    expect((app.manager as unknown as FakeManager).get("aa".repeat(20))?.selectedFiles).toEqual(["Dune.2021.1080p.mkv"]);
   });
 
   it("opens the sort selector and changes the sort chip", async () => {
