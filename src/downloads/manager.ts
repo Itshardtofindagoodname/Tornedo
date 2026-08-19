@@ -493,6 +493,14 @@ if (it.status === "downloading" || it.status === "starting" || it.status === "wa
     it.completedAt = now;
     it.lastUpdated = now;
     it.timeRemaining = 0;
+    // A subset download leaves WebTorrent's empty placeholders for every file
+    // that was not selected. The user only asked for the chosen files, so the
+    // deselected ones are removed from disk once the subset is verified done
+    // (otherwise the download folder is littered with 0-byte files the user
+    // never wanted — and an installer sees missing files it can't run).
+    if (it.selectedFiles && it.selectedFiles.length > 0 && it.fileList && it.fileList.length > 0) {
+      void removeUnselectedFiles(it.destination, it.fileList, it.selectedFiles);
+    }
     if (it.seedEnabled) {
       it.status = "seeding";
       this.strayHits.set(it.id, 0);
@@ -726,6 +734,7 @@ if (it.status !== "downloading" && it.status !== "starting" && it.status !== "wa
     this.startedAt.set(id, Date.now());
     const cached = this.store.loadCache(id);
     const source: string | Uint8Array = cached ? cached : it.magnet;
+    const startDeselected = (it.selectedFiles?.length ?? 0) > 0;
     try {
       this.client.add(
         {
@@ -733,6 +742,7 @@ if (it.status !== "downloading" && it.status !== "starting" && it.status !== "wa
           source,
           destination: it.destination,
           announce: [...PUBLIC_TRACKERS],
+          startDeselected,
         },
         this.handlersFor(it.id),
       );
@@ -874,6 +884,10 @@ switch (it.status) {
     const source: string | Uint8Array = cached ? cached : it.magnet;
     this.strayHits.set(it.id, 0);
     this.startedAt.set(it.id, Date.now());
+    // A subset seed must stay a subset: start deselected so the engine never
+    // fetches files that were intentionally not downloaded (and since removed
+    // from disk). The persisted selection is re-applied once metadata arrives.
+    const startDeselected = (it.selectedFiles?.length ?? 0) > 0;
     try {
       this.client.add(
         {
@@ -881,6 +895,7 @@ switch (it.status) {
           source,
           destination: it.destination,
           announce: [...PUBLIC_TRACKERS],
+          startDeselected,
         },
         this.handlersFor(it.id),
       );
@@ -1169,6 +1184,54 @@ async function removeDataSafe(destination: string, name: string): Promise<void> 
     await rm(target, { recursive: true, force: true });
   } catch {
     /* noop */
+  }
+}
+
+/**
+ * Delete the placeholder files a subset download never fetched, leaving only
+ * the files the user actually selected. WebTorrent creates an empty file on
+ * disk for every entry in the torrent, so without this a single-file pick
+ * still leaves the whole release visible (and an installer broken) on disk.
+ * Relative paths are resolved against `destination` and guarded so nothing
+ * outside the download directory can ever be touched; parent directories left
+ * behind by the deletions are removed while empty.
+ */
+async function removeUnselectedFiles(
+  destination: string,
+  fileList: readonly { path: string; length: number }[],
+  selected: readonly string[],
+): Promise<void> {
+  const { rm, readdir } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const destRoot = path.resolve(destination);
+  const wanted = new Set(selected);
+  const dirs = new Set<string>();
+  for (const f of fileList) {
+    if (!f.path || wanted.has(f.path)) continue;
+    const target = path.resolve(destRoot, f.path);
+    if (target !== destRoot && !target.startsWith(destRoot + path.sep)) continue;
+    try {
+      await rm(target, { force: true });
+    } catch {
+      /* best effort */
+    }
+    let dir = path.dirname(target);
+    while (dir !== destRoot && dir.startsWith(destRoot + path.sep)) {
+      dirs.add(dir);
+      dir = path.dirname(dir);
+    }
+  }
+  // Remove now-empty directories, deepest first. `rm` refuses directories
+  // without `recursive`, so verify emptiness (re-read) and only then remove —
+  // a directory that still holds files is left alone.
+  for (const d of [...dirs].sort((a, b) => b.length - a.length)) {
+    try {
+      if ((await readdir(d)).length === 0) {
+        await rm(d, { recursive: true, force: true });
+      }
+    } catch {
+      /* non-empty, in use, or already gone — keep it */
+    }
   }
 }
 

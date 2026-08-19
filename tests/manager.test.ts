@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { defaultConfig } from "../src/config/config.js";
 import { openInMemory } from "../src/database/db.js";
 import { TorrentStore } from "../src/database/store.js";
@@ -406,6 +409,87 @@ get: () => null,
       const revived = new TorrentManager({ client, store, getConfig: () => defaultConfig() });
       await revived.init();
       expect(revived.get(HASH_A)!.selectedFiles).toEqual(["movie.mkv"]);
+      await revived.suspend();
+    });
+
+    it("deletes unselected placeholder files from disk once a subset download completes", async () => {
+      const client = new ManualClient();
+      const dest = mkdtempSync(join(tmpdir(), "tornedo-manager-"));
+      const { manager } = makeManager(client, { seedAfterComplete: false });
+      await manager.init();
+      manager.add({
+        infohash: HASH_A,
+        magnet: `magnet:?xt=urn:btih:${HASH_A}`,
+        name: "Game",
+        destination: dest,
+        selectedFiles: ["Game/setup.exe"],
+        startDeselected: true,
+      });
+      client.fireMetadata(HASH_A, {
+        name: "Game",
+        total: 5_000,
+        files: 5,
+        fileList: [
+          { path: "Game/setup.exe", length: 1000 },
+          { path: "Game/f01.mkv", length: 1000 },
+          { path: "Game/f02.mkv", length: 1000 },
+          { path: "Game/MDS/data.img", length: 1000 },
+          { path: "Game/MDS/readme.txt", length: 1000 },
+        ],
+      });
+      // WebTorrent creates an empty placeholder file for every torrent entry,
+      // even the deselected ones — simulate that on-disk layout.
+      mkdirSync(join(dest, "Game", "MDS"), { recursive: true });
+      writeFileSync(join(dest, "Game", "setup.exe"), "x");
+      writeFileSync(join(dest, "Game", "f01.mkv"), "x");
+      writeFileSync(join(dest, "Game", "f02.mkv"), "x");
+      writeFileSync(join(dest, "Game", "MDS", "data.img"), "x");
+      writeFileSync(join(dest, "Game", "MDS", "readme.txt"), "x");
+
+      client.fireDone(HASH_A);
+      // The cleanup runs fire-and-forget; wait for the placeholder to vanish.
+      const deadline = Date.now() + 2_000;
+      while (existsSync(join(dest, "Game", "f01.mkv")) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      // Only the chosen file survives; everything else (and the emptied MDS
+      // folder) is gone, while the top-level Game folder keeps the download.
+      expect(existsSync(join(dest, "Game", "setup.exe"))).toBe(true);
+      expect(existsSync(join(dest, "Game", "f01.mkv"))).toBe(false);
+      expect(existsSync(join(dest, "Game", "f02.mkv"))).toBe(false);
+      expect(existsSync(join(dest, "Game", "MDS"))).toBe(false);
+      expect(existsSync(join(dest, "Game"))).toBe(true);
+      await manager.suspend();
+      rmSync(dest, { recursive: true, force: true });
+    });
+
+    it("restarts a subset seed deselected so removed files are not re-downloaded", async () => {
+      const client = new ManualClient();
+      const { manager, store } = makeManager(client, { seedAfterComplete: true });
+      await manager.init();
+      manager.add({
+        infohash: HASH_A,
+        magnet: `magnet:?xt=urn:btih:${HASH_A}`,
+        name: "A",
+        selectedFiles: ["a.bin"],
+        startDeselected: true,
+      });
+      client.fireMetadata(HASH_A, {
+        name: "A",
+        total: 100,
+        files: 1,
+        fileList: [{ path: "a.bin", length: 100 }],
+      });
+      client.fireDone(HASH_A);
+      await flush();
+      expect(manager.get(HASH_A)!.status).toBe("seeding");
+      await manager.suspend();
+
+      const revived = new TorrentManager({ client, store, getConfig: () => defaultConfig() });
+      await revived.init();
+      const added = client.adds.get(HASH_A)!;
+      expect(added.startDeselected).toBe(true);
       await revived.suspend();
     });
   });
