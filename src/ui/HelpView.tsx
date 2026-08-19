@@ -17,7 +17,6 @@ const ACTION_LABELS: Record<KeyAction, string> = {
   confirm: "confirm / open",
   download: "download",
   downloadTo: "download to…",
-  downloadFiles: "download / choose files…",
   pause: "pause",
   resume: "resume",
   remove: "remove",

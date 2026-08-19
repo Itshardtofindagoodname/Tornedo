@@ -136,12 +136,11 @@ Common flags: `--json` (machine-readable output on stdout only), `--source <id>`
 | --- | --- |
 | `↑/k` `↓/j` | navigate |
 | `enter` / `d` | download selected |
-| `F` | download selected, choosing which files first |
 | `D` | download to a chosen directory (then `p`/`r`/`x`/`s`/`m`/`o` manage it) |
 | `c` | category scope for the current results |
 | `t` | sort order for the current results |
 | `ctrl+f` | refine the results with a filter (min/max size, source, resolution, codec, audio, language, quality) |
-| `i` | toggle details pane |
+| `i` | details inspector — files are selected there (`space` toggle · `a` all · `n` none · `enter`/`d` download · `esc` back) |
 | `/` | search again |
 | `v` | downloads view |
 | `p` / `r` | pause / resume selected download |

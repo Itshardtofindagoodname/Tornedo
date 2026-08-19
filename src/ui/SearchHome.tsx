@@ -69,11 +69,15 @@ export function SearchHome({
         <Box flexDirection="column" marginTop={compact ? 2 : 4} paddingX={4}>
           <Text color={palette.faint}>recent searches</Text>
           {recentSearches.map((q, i) => (
-            <Box key={q} height={1}>
+            <Box key={q} height={1} width="100%">
               <Text color={canBrowse && i === recentIndex ? palette.accent : palette.faint} bold={canBrowse && i === recentIndex}>
                 {canBrowse && i === recentIndex ? "› " : "  "}
               </Text>
-              <Text color={canBrowse && i === recentIndex ? palette.text : palette.dim}>{q}</Text>
+              <Box flexGrow={1}>
+                <Text color={canBrowse && i === recentIndex ? palette.text : palette.dim} wrap="truncate">
+                  {q}
+                </Text>
+              </Box>
             </Box>
           ))}
         </Box>

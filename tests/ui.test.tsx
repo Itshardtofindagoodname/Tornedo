@@ -23,6 +23,10 @@ class FakeManager extends EventEmitter {
     return this.items;
   }
 
+  get(id: string): TorrentItem | null {
+    return this.items.find((i) => i.id === id) ?? null;
+  }
+
   lastRecovery(): RecoveryReport | null {
     return this.recovery;
   }
@@ -359,9 +363,8 @@ describe("TUI", () => {
     key(instance, "\r");
     await wait(30);
 
-    key(instance, "2");
-    await wait(30);
     const frame = instance.lastFrame() ?? "";
+    expect(frame).toContain("Downloads");
     expect(frame).toContain("Dune");
     expect(frame).toContain("queued");
     expect((app.manager as unknown as FakeManager).items.length).toBe(1);

@@ -33,11 +33,15 @@ async function main(): Promise<void> {
   }
 
   let app: Application;
-  // Destructive commands only enumerate and delete items; do not let startup
-  // resume downloads into a fresh session moments before wiping them.
-  const destructive = args.clear || args.command === "clear" || args.command === "uninstall";
+  // Destructive commands (`clear`, `uninstall`, bare `--clear`) enumerate and
+  // delete items; do not let startup resume downloads into a fresh session
+  // moments before wiping them. `history` also never needs to resume downloads,
+  // but it is NOT destructive — a startup failure must never wipe the state
+  // directory just because the user asked to clear their search history.
+  const destructive = args.command === "clear" || args.command === "uninstall" || (args.command === null && args.clear);
+  const noResume = destructive || args.command === "history";
   try {
-    app = await Application.create({ autoResume: destructive ? false : undefined });
+    app = await Application.create({ autoResume: noResume ? false : undefined });
   } catch (e) {
     process.stderr.write(`failed to start: ${e instanceof Error ? e.message : String(e)}\n`);
     if (destructive) {

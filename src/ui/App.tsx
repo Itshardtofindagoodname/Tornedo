@@ -16,7 +16,7 @@ import type { SearchSession, SourceReport } from "../app/search-service.js";
 import type { KeyAction } from "../config/config.js";
 import { MEDIA_CATEGORIES, type MediaCategory } from "../model/search.js";
 import type { Release } from "../model/search.js";
-import type { TorrentItem } from "../model/torrent.js";
+import type { TorrentFileInfo, TorrentItem } from "../model/torrent.js";
 import {
   parseFilterText,
   SORT_OPTIONS,
@@ -26,7 +26,6 @@ import {
 import { truncate } from "../utils/duration.js";
 import {
   Confirm,
-  FileListOverlay,
   Footer,
   Header,
   Modal,
@@ -54,8 +53,7 @@ type View = "home" | "results" | "details" | "downloads" | "sources" | "settings
 type Overlay =
   | { kind: "prompt"; title: string; hint?: string; onSubmit: (value: string) => void }
   | { kind: "select"; title: string; options: SelectOption<string>[]; hint?: string; onPick: (value: string) => void }
-  | { kind: "confirm"; prompt: string; onConfirm: () => void }
-  | { kind: "files"; itemId: string };
+  | { kind: "confirm"; prompt: string; onConfirm: () => void };
 
 export interface TornedoAppProps {
   app: Application;
@@ -96,10 +94,14 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   const [overlaySelect, setOverlaySelect] = useState(0);
   const [overlayYes, setOverlayYes] = useState(false);
 
-  // --- file-selection state ---------------------------------------------------
-  const [pendingFilesId, setPendingFilesId] = useState<string | null>(null);
+  // --- file-selection state (details view, default) ---------------------------
+  // Opening a release's details auto-resolves its file list; the user toggles
+  // the checkbox list right there (space / a / n) and commits with download.
+  const [detailsFilesId, setDetailsFilesId] = useState<string | null>(null);
+  const [detailsFilesCreated, setDetailsFilesCreated] = useState(false);
   const [fileCursor, setFileCursor] = useState(0);
   const [fileChecks, setFileChecks] = useState<ReadonlySet<string>>(new Set());
+  const fileChecksInitId = useRef<string | null>(null);
 
   const [message, setMessage] = useState<string | null>(null);
 
@@ -123,28 +125,26 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
     messageTimer.current = setTimeout(() => setMessage(null), 5000);
   };
 
-  // Once a torrent added via "choose files" resolves its metadata, open the
-  // file-selection overlay (nothing downloads until the user commits).
+  // Once the details view's torrent resolves its metadata, initialize the file
+  // checkboxes (everything checked by default) so the user can adjust them.
   useEffect(() => {
-    if (!pendingFilesId) return;
-    const item = app.manager.get(pendingFilesId);
+    if (!detailsFilesId) return;
+    const item = app.manager.get(detailsFilesId);
     if (!item) {
-      setPendingFilesId(null);
+      if (fileChecksInitId.current === detailsFilesId) {
+        setDetailsFilesId(null);
+        setDetailsFilesCreated(false);
+        setFileChecks(new Set());
+        fileChecksInitId.current = null;
+      }
       return;
     }
-    if (item.status === "error") {
-      setPendingFilesId(null);
-      showMessage(`Could not resolve files: ${item.error ?? "unknown error"}`);
-      return;
-    }
-    if (item.fileList && item.fileList.length > 0) {
-      const paths = item.fileList.map((f) => f.path);
-      setFileChecks(new Set(paths));
+    if (item.fileList && item.fileList.length > 0 && fileChecksInitId.current !== detailsFilesId) {
+      fileChecksInitId.current = detailsFilesId;
+      setFileChecks(new Set(item.fileList.map((f) => f.path)));
       setFileCursor(0);
-      setPendingFilesId(null);
-      setOverlay({ kind: "files", itemId: item.id });
     }
-  }, [pendingFilesId, tick]);
+  }, [detailsFilesId, tick]);
 
   const goto = (next: View): void => {
     prevView.current = view;
@@ -251,64 +251,6 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   const handleOverlayKey = (input: string, key: Key): void => {
     const o = overlay;
     if (!o) return;
-    if (o.kind === "files") {
-      const item = app.manager.get(o.itemId);
-      const files = item?.fileList ?? [];
-      if (key.upArrow) {
-        setFileCursor((i) => Math.max(0, i - 1));
-        return;
-      }
-      if (key.downArrow) {
-        setFileCursor((i) => Math.min(files.length - 1, i + 1));
-        return;
-      }
-      if (key.pageUp) {
-        setFileCursor((i) => Math.max(0, i - PAGE_STEP));
-        return;
-      }
-      if (key.pageDown) {
-        setFileCursor((i) => Math.min(files.length - 1, i + PAGE_STEP));
-        return;
-      }
-      if (input === " " || input.toLowerCase() === "x") {
-        const cur = files[fileCursor];
-        if (cur) {
-          setFileChecks((prev) => {
-            const next = new Set(prev);
-            if (next.has(cur.path)) next.delete(cur.path);
-            else next.add(cur.path);
-            return next;
-          });
-        }
-        return;
-      }
-      if (input.toLowerCase() === "a") {
-        setFileChecks(new Set(files.map((f) => f.path)));
-        return;
-      }
-      if (input.toLowerCase() === "n") {
-        setFileChecks(new Set());
-        return;
-      }
-      if (key.return) {
-        const paths = files.filter((f) => fileChecks.has(f.path)).map((f) => f.path);
-        if (paths.length === 0) {
-          showMessage("Select at least one file to download.");
-          return;
-        }
-        app.manager.setFileSelection(o.itemId, paths);
-        closeOverlay();
-        showMessage(`Downloading ${paths.length} of ${files.length} files.`);
-        return;
-      }
-      if (key.escape) {
-        app.manager.pause(o.itemId);
-        closeOverlay();
-        showMessage("Cancelled — torrent left paused in Downloads.");
-        return;
-      }
-      return;
-    }
     if (o.kind === "prompt") {
       if (key.return) {
         confirmOverlay();
@@ -398,7 +340,54 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
     showMessage(`Queued: ${truncate(item.name, 60)}`);
   };
 
-  const downloadWithFiles = (): void => {
+  // --- details-view file selection (default state, no keybind) -----------------
+
+  const detailsFileList = (): TorrentFileInfo[] => {
+    if (!detailsFilesId) return [];
+    return app.manager.get(detailsFilesId)?.fileList ?? [];
+  };
+
+  /** Resolve the release's file list as soon as its details view opens. */
+  const resolveDetailsFiles = (release: Release): void => {
+    if (release.magnet && !/^magnet:/i.test(release.magnet)) {
+      setDetailsFilesId(null);
+      setDetailsFilesCreated(false);
+      setFileChecks(new Set());
+      fileChecksInitId.current = null;
+      return;
+    }
+    const existing = app.manager.get(release.infohash.toLowerCase());
+    if (existing?.fileList && existing.fileList.length > 0) {
+      fileChecksInitId.current = existing.id;
+      setDetailsFilesId(existing.id);
+      setDetailsFilesCreated(false);
+      setFileChecks(new Set(existing.fileList.map((f) => f.path)));
+      setFileCursor(0);
+      return;
+    }
+    const cfg = app.getConfig();
+    const item = app.manager.add({
+      infohash: release.infohash,
+      magnet: release.magnet,
+      name: release.title,
+      category: release.category,
+      metadata: release.metadata,
+      size: release.size,
+      destination: cfg.downloadDir,
+      seedEnabled: cfg.seedAfterComplete,
+      // Nothing downloads until the user commits a file selection.
+      startDeselected: true,
+    });
+    const known = item.fileList && item.fileList.length > 0;
+    fileChecksInitId.current = item.id;
+    setDetailsFilesId(item.id);
+    setDetailsFilesCreated(!known);
+    setFileChecks(known ? new Set(item.fileList!.map((f) => f.path)) : new Set());
+    setFileCursor(0);
+  };
+
+  /** Commit the current file selection in the details view and start downloading. */
+  const commitDetailsDownload = async (destination?: string): Promise<void> => {
     const cur = currentRelease();
     if (!cur) return;
     const r = cur.rels[cur.index]!;
@@ -407,21 +396,73 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
       return;
     }
     const cfg = app.getConfig();
-    const item = app.manager.add({
+    const item = detailsFilesId ? app.manager.get(detailsFilesId) : null;
+    if (item?.fileList && item.fileList.length > 0) {
+      if (fileChecks.size === 0) {
+        showMessage("Select at least one file to download.");
+        return;
+      }
+      app.manager.setFileSelection(item.id, [...fileChecks]);
+      setDetailsFilesId(null);
+      setDetailsFilesCreated(false);
+      setFileChecks(new Set());
+      fileChecksInitId.current = null;
+      goto("downloads");
+      showMessage(`Downloading ${fileChecks.size} of ${item.fileList.length} files.`);
+      return;
+    }
+    // File list not resolved yet — download the whole torrent normally.
+    if (item) await app.manager.remove(item.id);
+    const fresh = app.manager.add({
       infohash: r.infohash,
       magnet: r.magnet,
       name: r.title,
       category: r.category,
       metadata: r.metadata,
       size: r.size,
-      destination: cfg.downloadDir,
+      destination: destination ?? cfg.downloadDir,
       seedEnabled: cfg.seedAfterComplete,
-      // Nothing downloads until the user picks files in the overlay.
-      startDeselected: true,
     });
-    showMessage(`Resolving files for: ${truncate(item.name, 50)}…`);
-    setPendingFilesId(item.id);
+    setDetailsFilesId(null);
+    setDetailsFilesCreated(false);
+    setFileChecks(new Set());
+    fileChecksInitId.current = null;
+    goto("downloads");
+    showMessage(`Queued: ${truncate(fresh.name, 60)}`);
   };
+
+  /** Remove the auto-resolved browsing item when leaving details without committing. */
+  const cleanupDetailsFiles = (): void => {
+    if (!detailsFilesId) return;
+    const item = app.manager.get(detailsFilesId);
+    if (item && detailsFilesCreated && item.status !== "downloading") {
+      void app.manager.remove(detailsFilesId);
+    }
+    setDetailsFilesId(null);
+    setDetailsFilesCreated(false);
+    setFileChecks(new Set());
+    fileChecksInitId.current = null;
+  };
+
+  const toggleFile = (path: string): void => {
+    setFileChecks((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  // Resolve the release's file list the moment its details view opens; drop the
+  // auto-created browsing item when the user leaves without committing.
+  useEffect(() => {
+    if (view !== "details") {
+      cleanupDetailsFiles();
+      return;
+    }
+    const cur = currentRelease();
+    if (cur) resolveDetailsFiles(cur.rels[cur.index]!);
+  }, [view]);
 
   const currentDownload = (): TorrentItem | undefined => {
     const items = app.manager.list();
@@ -737,9 +778,6 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
       case "download":
         downloadSelected();
         break;
-      case "downloadFiles":
-        downloadWithFiles();
-        break;
       case "downloadTo":
         openPrompt("download to", app.getConfig().downloadDir, (dir) => {
           if (dir.trim()) downloadSelected(dir.trim());
@@ -772,18 +810,29 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
     }
   };
 
-  const handleDetailsKey = (action: KeyAction | null): void => {
+  const handleDetailsKey = (action: KeyAction | null, input: string): void => {
+    const files = detailsFileList();
+    const last = Math.max(0, files.length - 1);
     switch (action) {
+      case "up":
+        setFileCursor((i) => Math.max(0, i - 1));
+        break;
+      case "down":
+        setFileCursor((i) => Math.min(last, i + 1));
+        break;
+      case "pageup":
+        setFileCursor((i) => Math.max(0, i - PAGE_STEP));
+        break;
+      case "pagedown":
+        setFileCursor((i) => Math.min(last, i + PAGE_STEP));
+        break;
       case "confirm":
       case "download":
-        downloadSelected();
-        break;
-      case "downloadFiles":
-        downloadWithFiles();
+        void commitDetailsDownload();
         break;
       case "downloadTo":
         openPrompt("download to", app.getConfig().downloadDir, (dir) => {
-          if (dir.trim()) downloadSelected(dir.trim());
+          if (dir.trim()) void commitDetailsDownload(dir.trim());
         });
         break;
       case "copyMagnet":
@@ -801,6 +850,16 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
       default:
         navigateAction(action);
         break;
+    }
+    if (files.length > 0) {
+      if (input === " ") {
+        const cur = files[Math.min(fileCursor, last)];
+        if (cur) toggleFile(cur.path);
+      } else if (input.toLowerCase() === "a") {
+        setFileChecks(new Set(files.map((f) => f.path)));
+      } else if (input.toLowerCase() === "n") {
+        setFileChecks(new Set());
+      }
     }
   };
 
@@ -982,7 +1041,7 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
         handleResultsKey(action);
         break;
       case "details":
-        handleDetailsKey(action);
+        handleDetailsKey(action, input);
         break;
       case "downloads":
         handleDownloadsKey(action);
@@ -1020,7 +1079,6 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
       hints = [
         { keys: fk("confirm", "enter"), label: "open" },
         { keys: fk("download", "d"), label: "download" },
-        { keys: fk("downloadFiles", "F"), label: "choose files" },
         { keys: fk("search", "/"), label: "search" },
         { keys: fk("downloads", "2"), label: "downloads" },
         { keys: fk("help", "?"), label: "help" },
@@ -1029,7 +1087,6 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
     case "details":
       hints = [
         { keys: fk("confirm", "enter"), label: "download" },
-        { keys: fk("downloadFiles", "F"), label: "choose files" },
         { keys: fk("downloadTo", "D"), label: "download to" },
         { keys: fk("copyMagnet", "y"), label: "copy magnet" },
         { keys: "esc", label: "back" },
@@ -1101,7 +1158,7 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   return (
     <Box flexDirection="column" height={rows}>
       <Header active={section} right={headerRight} compact={compact} />
-      <Box flexGrow={1} flexDirection="column" minHeight={0}>
+      <Box flexGrow={1} flexDirection="column" minHeight={0} overflow="hidden">
         {view === "home" ? (
           <SearchHome
             query={query}
@@ -1129,7 +1186,19 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
             wide={wide}
           />
         ) : null}
-        {view === "details" && detailsRelease ? <DetailView app={app} release={detailsRelease} /> : null}
+        {view === "details" && detailsRelease ? (
+          <DetailView
+            app={app}
+            release={detailsRelease}
+            fileItem={detailsFilesId ? app.manager.get(detailsFilesId) : null}
+            fileChecks={fileChecks}
+            fileCursor={fileCursor}
+            tick={tick}
+            onToggleFile={toggleFile}
+            onSelectAll={() => setFileChecks(new Set(detailsFileList().map((f) => f.path)))}
+            onSelectNone={() => setFileChecks(new Set())}
+          />
+        ) : null}
         {view === "downloads" ? (
           <DownloadsView app={app} selected={selectedDownload} diagnostics={downloadDiagnostics} tick={tick} wide={wide} />
         ) : null}
@@ -1165,15 +1234,6 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
       ) : null}
       {overlay?.kind === "confirm" ? (
         <Confirm prompt={overlay.prompt} yes={overlayYes} />
-      ) : null}
-      {overlay?.kind === "files" ? (
-        <FileListOverlay
-          title="choose files to download"
-          files={app.manager.get(overlay.itemId)?.fileList ?? []}
-          checks={fileChecks}
-          cursor={fileCursor}
-          hint="space toggle · a all · n none · enter start download · esc cancel"
-        />
       ) : null}
     </Box>
   );

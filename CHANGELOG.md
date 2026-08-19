@@ -2,6 +2,37 @@
 
 All notable changes to this project are documented in this file.
 
+## [3.0.0] - 2026-08-20
+
+### File selection, redesigned
+
+- **File selection is a default state of the details inspector**, not a
+  keybind. Opening details for a torrent automatically resolves its file list
+  and shows a checkbox list (`space` toggle · `a` all · `n` none · `↑/↓` move).
+  Nothing downloads until you commit with `enter`/`d`; only the checked files
+  are fetched. Leaving without committing (or while only browsing) cleans up the
+  temporary item. The `F`/`shift+f` file-picker overlay and the
+  `downloadFiles` keybinding were removed entirely.
+
+### History cleanup
+
+- `tornedo history --clear` no longer marks the run as a destructive
+  `--clear`: previously a startup failure during a `history --clear` run would
+  wipe the whole state directory (database, config, watch state) as a safety
+  measure meant for real `clear`/`uninstall` runs. History commands are also
+  excluded from download resume.
+
+### Fixes
+
+- Fixed overlapping text in the recent-searches section of the home screen
+  (long query strings now truncate inside a constrained row).
+- Added `overflow: hidden` clipping to the main content area so a tall details
+  inspector can never bleed into the toast/footer rows.
+
+### Chores
+
+- Bumped the published version to 3.0.0 and re-synced `tornedo --version`.
+
 ## [2.1.0] - 2026-08-19
 
 ### Clean uninstall
