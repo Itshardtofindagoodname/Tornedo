@@ -15,6 +15,7 @@ export type KeyAction =
   | "confirm"
   | "download"
   | "downloadTo"
+  | "downloadFiles"
   | "pause"
   | "resume"
   | "remove"
@@ -44,6 +45,7 @@ export const KEY_ACTIONS: readonly KeyAction[] = [
   "confirm",
   "download",
   "downloadTo",
+  "downloadFiles",
   "pause",
   "resume",
   "remove",
@@ -149,6 +151,7 @@ export function defaultKeybindings(): Partial<Record<KeyAction, string[]>> {
     confirm: ["enter"],
     download: ["d"],
     downloadTo: ["shift+d"],
+    downloadFiles: ["shift+f"],
     pause: ["p"],
     resume: ["r"],
     remove: ["x"],

@@ -85,6 +85,10 @@ export class LazyTorrentClient implements TorrentClient {
     if (this.inner) this.inner.retryMetadata(id);
   }
 
+  selectFiles(id: string, paths: string[]): void {
+    if (this.inner) this.inner.selectFiles(id, paths);
+  }
+
   stats(): ClientStats {
     if (!this.inner) return { downloadSpeed: 0, uploadSpeed: 0, active: 0 };
     return this.inner.stats();

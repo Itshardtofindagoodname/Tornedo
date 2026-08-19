@@ -7,6 +7,8 @@
 import { useRef } from "react";
 import { Box, Text, useBoxMetrics, useWindowSize, type DOMElement } from "ink";
 import type { ReactNode } from "react";
+import type { TorrentFileInfo } from "../model/torrent.js";
+import { formatBytes } from "../utils/bytes.js";
 import { palette, SPINNER_FRAMES } from "./theme.js";
 
 export type Section = "search" | "downloads" | "sources" | "settings";
@@ -405,4 +407,74 @@ export function Confirm({ prompt, yes, width = 60 }: { prompt: string; yes: bool
       </Box>
     </Modal>
   );
+}
+
+// --- file selection -----------------------------------------------------------
+
+const FILE_ROWS_RESERVED = 6;
+
+/**
+ * Checkbox list of the files inside a torrent. All files start checked; the
+ * user unchecks optional extras before committing (like qBittorrent's "choose
+ * files" dialog). Scrolls a window around the cursor so long lists fit the
+ * terminal. App owns the cursor/selection state and the keys.
+ */
+export function FileListOverlay({
+  title,
+  files,
+  checks,
+  cursor,
+  hint,
+}: {
+  title: string;
+  files: readonly TorrentFileInfo[];
+  checks: ReadonlySet<string>;
+  cursor: number;
+  hint?: string;
+}): ReactNode {
+  const { rows } = useWindowSize();
+  const total = files.reduce((sum, f) => sum + (f.length || 0), 0);
+  const maxRows = Math.max(3, rows - FILE_ROWS_RESERVED);
+  const clamped = Math.min(Math.max(0, cursor), Math.max(0, files.length - 1));
+  const start = Math.max(0, clamped - Math.floor(maxRows / 2));
+  const visible = files.slice(start, start + maxRows);
+  const width = Math.max(60, Math.min(110, columnsForPaths(files)));
+  return (
+    <Modal title={title} width={width + 6}>
+      <Box flexDirection="column" width="100%">
+        <Text color={palette.dim}>
+          {files.length} file{files.length === 1 ? "" : "s"} · {formatBytes(total)} ·{" "}
+          {checks.size} selected
+        </Text>
+        <Box flexDirection="column" marginTop={1}>
+          {visible.map((f) => {
+            const index = start + files.indexOf(f);
+            const isCursor = index === clamped;
+            const checked = checks.has(f.path);
+            return (
+              <Box key={f.path} height={1} backgroundColor={isCursor ? palette.accent : undefined} paddingX={1}>
+                <Text color={isCursor ? palette.bg : palette.subtext} wrap="truncate">
+                  {isCursor ? "»" : " "} [{checked ? "x" : " "}] {f.path}
+                </Text>
+                <Text color={isCursor ? palette.bg : palette.faint} wrap="truncate">
+                  {" "} {formatBytes(f.length)}
+                </Text>
+              </Box>
+            );
+          })}
+        </Box>
+        {hint ? (
+          <Box marginTop={1}>
+            <Text color={palette.faint}>{hint}</Text>
+          </Box>
+        ) : null}
+      </Box>
+    </Modal>
+  );
+}
+
+function columnsForPaths(files: readonly TorrentFileInfo[]): number {
+  let longest = 40;
+  for (const f of files) longest = Math.max(longest, f.path.length);
+  return Math.min(110, longest + 18);
 }

@@ -18,6 +18,7 @@ export async function runAdd(ctx: CliContext, command: string, input: string): P
   if (!parsed) throw new Error(`Could not parse ${command} input`);
 
   const cfg = ctx.app.getConfig();
+  const selectedFiles = normalizeSelection(ctx, command, parsed);
   const item = ctx.app.manager.add({
     infohash: parsed.infoHash,
     magnet: parsed.magnet,
@@ -27,6 +28,7 @@ export async function runAdd(ctx: CliContext, command: string, input: string): P
     destination: ctx.args.dir ?? cfg.downloadDir,
     seedEnabled: ctx.args.seed ?? cfg.seedAfterComplete,
     priority: ctx.args.priority ?? 0,
+    selectedFiles,
   });
 
   if (ctx.args.json) {
@@ -36,6 +38,9 @@ export async function runAdd(ctx: CliContext, command: string, input: string): P
     ctx.log(`  infohash   ${item.infohash}`);
     ctx.log(`  destination ${item.destination}`);
     ctx.log(`  seeding    ${item.seedEnabled ? "on" : "off"}`);
+    if (selectedFiles && selectedFiles.length > 0) {
+      ctx.log(`  files      ${selectedFiles.length} selected of ${item.files ?? "?"} (rest skipped)`);
+    }
   }
 
   if (ctx.args.wait) {
@@ -50,6 +55,8 @@ interface ResolvedInput {
   name: string;
   category?: string;
   sourceId?: string;
+  /** File listing, available immediately for `.torrent` inputs. */
+  files?: { path: string; length: number }[];
 }
 
 async function resolveInput(ctx: CliContext, command: string, input: string): Promise<ResolvedInput | null> {
@@ -76,7 +83,28 @@ async function resolveInput(ctx: CliContext, command: string, input: string): Pr
     infoHash: info.infoHash,
     magnet: buildMagnet(info.infoHash, info.name),
     name: info.name,
+    files: info.files.map((f) => ({ path: f.path || f.name, length: f.length })),
   };
+}
+
+/**
+ * Validate `--select` paths. For `.torrent` inputs the file list is known
+ * immediately, so a selection that matches nothing is a hard error; for magnets
+ * validation happens after metadata resolves (with a safe keep-everything
+ * fallback in the engine).
+ */
+function normalizeSelection(ctx: CliContext, command: string, parsed: ResolvedInput): string[] | undefined {
+  const select = ctx.args.select;
+  if (select.length === 0) return undefined;
+  if (command === "file" && parsed.files && parsed.files.length > 0) {
+    const matched = parsed.files.filter((f) => select.includes(f.path));
+    if (matched.length === 0) {
+      throw new Error(
+        `--select matched no files. Available files:\n${parsed.files.map((f) => `  ${f.path}`).join("\n")}`,
+      );
+    }
+  }
+  return select;
 }
 
 function waitForCompletion(ctx: CliContext, item: TorrentItem): Promise<void> {

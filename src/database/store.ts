@@ -34,6 +34,7 @@ export interface TorrentRow {
   completed_at: number | null;
   last_updated: number;
   error: string | null;
+  selected_files: string | null;
 }
 
 export function rowToItem(row: TorrentRow): TorrentItem {
@@ -43,6 +44,17 @@ export function rowToItem(row: TorrentRow): TorrentItem {
     if (parsed && typeof parsed === "object") metadata = parsed as ReleaseMetadata;
   } catch {
     metadata = {};
+  }
+  let selectedFiles: string[] | undefined;
+  if (row.selected_files) {
+    try {
+      const parsed = JSON.parse(row.selected_files) as unknown;
+      if (Array.isArray(parsed)) {
+        selectedFiles = parsed.filter((x): x is string => typeof x === "string" && x.length > 0);
+      }
+    } catch {
+      selectedFiles = undefined;
+    }
   }
   return {
     id: row.id,
@@ -68,6 +80,7 @@ export function rowToItem(row: TorrentRow): TorrentItem {
     priority: row.priority,
     seedEnabled: row.seed_enabled !== 0,
     files: row.files,
+    selectedFiles: selectedFiles ?? null,
     queuedAt: row.queued_at,
     startedAt: row.started_at,
     completedAt: row.completed_at,
@@ -97,6 +110,7 @@ export interface TorrentPatch {
   metadata?: ReleaseMetadata;
   destination?: string;
   files?: number | null;
+  selectedFiles?: string[] | null;
   startedAt?: number | null;
   completedAt?: number | null;
   lastUpdated?: number;
@@ -143,13 +157,13 @@ export class TorrentStore {
           status, progress, downloaded, uploaded, size, source_size, torrent_size,
           download_speed, upload_speed,
           peers, seeds, time_remaining, priority, seed_enabled, files, queued_at,
-          started_at, completed_at, last_updated, error
+          started_at, completed_at, last_updated, error, selected_files
         ) VALUES (
           @id, @infohash, @magnet, @name, @category, @sourceId, @metadata, @destination,
           @status, @progress, @downloaded, @uploaded, @size, @sourceSize, @torrentSize,
           @downloadSpeed, @uploadSpeed,
           @peers, @seeds, @timeRemaining, @priority, @seedEnabled, @files, @queuedAt,
-          @startedAt, @completedAt, @lastUpdated, @error
+          @startedAt, @completedAt, @lastUpdated, @error, @selectedFiles
         )
         ON CONFLICT(id) DO UPDATE SET
           infohash = excluded.infohash,
@@ -178,7 +192,8 @@ export class TorrentStore {
           started_at = excluded.started_at,
           completed_at = excluded.completed_at,
           last_updated = excluded.last_updated,
-          error = excluded.error`,
+          error = excluded.error,
+          selected_files = excluded.selected_files`,
       )
       .run(this.toParams(item));
   }
@@ -213,6 +228,7 @@ export class TorrentStore {
       completedAt: item.completedAt,
       lastUpdated: item.lastUpdated,
       error: item.error,
+      selectedFiles: item.selectedFiles && item.selectedFiles.length > 0 ? JSON.stringify(item.selectedFiles) : null,
     };
   }
 
@@ -240,6 +256,7 @@ export class TorrentStore {
     if (patch.metadata !== undefined) merged.metadata = patch.metadata;
     if (patch.destination !== undefined) merged.destination = patch.destination;
     if (patch.files !== undefined) merged.files = patch.files;
+    if (patch.selectedFiles !== undefined) merged.selectedFiles = patch.selectedFiles;
     if (patch.startedAt !== undefined) merged.startedAt = patch.startedAt;
     if (patch.completedAt !== undefined) merged.completedAt = patch.completedAt;
     if (patch.lastUpdated !== undefined) merged.lastUpdated = patch.lastUpdated;

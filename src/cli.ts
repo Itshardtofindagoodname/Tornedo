@@ -33,10 +33,18 @@ async function main(): Promise<void> {
   }
 
   let app: Application;
+  // Destructive commands only enumerate and delete items; do not let startup
+  // resume downloads into a fresh session moments before wiping them.
+  const destructive = args.clear || args.command === "clear" || args.command === "uninstall";
   try {
-    app = await Application.create();
+    app = await Application.create({ autoResume: destructive ? false : undefined });
   } catch (e) {
     process.stderr.write(`failed to start: ${e instanceof Error ? e.message : String(e)}\n`);
+    if (destructive) {
+      const { wipeStateDir } = await import("./cli/commands/clear.js");
+      await wipeStateDir().catch(() => {});
+      process.stderr.write("State directory wiped.\n");
+    }
     process.exit(1);
   }
   const ctx = new CliContext(app, args);

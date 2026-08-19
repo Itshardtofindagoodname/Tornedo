@@ -109,19 +109,26 @@ tornedo downloads          List the queue and active torrents
 tornedo magnet <uri>       Add a torrent by magnet URI (waits for completion)
 tornedo infohash <hash>    Add a torrent by bare infohash
 tornedo file <path>        Add a .torrent file
+tornedo file <path> --select <paths>   Download only the listed files
+tornedo files <input>      List a torrent's files before downloading
 tornedo watch <dir>        Watch a directory for .torrent / magnet files
+tornedo history            List recent searches
+tornedo history --clear    Clear recent search history
 tornedo config             Show / set configuration
 tornedo sources            List sources and their enabled state
 tornedo sources --check    Diagnose Torznab / Internet Archive providers
 tornedo doctor             Run self-diagnostics (config, DB, disk, network…)
 tornedo doctor --check     Include live endpoint capability probes
 tornedo doctor --json      Machine-readable report
+tornedo clear              Delete all downloads and wipe local state
+tornedo uninstall [--clear] Uninstall the npm package (optionally wiping first)
 tornedo tui                Terminal UI (default when no command)
 ```
 
 Common flags: `--json` (machine-readable output on stdout only), `--source <id>`
-(repeatable), `--category <cat>`, `--limit <n>`, `--dir <dir>`, `--seed` /
-`--no-seed`, `--no-wait`, `-q/--quiet`. See `tornedo help`.
+(repeatable), `--category <cat>`, `--limit <n>`, `--dir <dir>`, `--select <paths>`
+(repeatable / comma-separated), `--seed` / `--no-seed`, `--no-wait`, `-y/--yes`,
+`-q/--quiet`. See `tornedo help`.
 
 ## Terminal UI
 
@@ -129,6 +136,7 @@ Common flags: `--json` (machine-readable output on stdout only), `--source <id>`
 | --- | --- |
 | `↑/k` `↓/j` | navigate |
 | `enter` / `d` | download selected |
+| `F` | download selected, choosing which files first |
 | `D` | download to a chosen directory (then `p`/`r`/`x`/`s`/`m`/`o` manage it) |
 | `c` | category scope for the current results |
 | `t` | sort order for the current results |

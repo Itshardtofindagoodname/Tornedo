@@ -60,4 +60,26 @@ describe("Application", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("clears recent search history permanently", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tornedo-history-clear-"));
+    const prev = process.env.TORNEDO_STATE_DIR;
+    process.env.TORNEDO_STATE_DIR = dir;
+    try {
+      const first = await Application.create({ freshConfig: true });
+      first.addRecentSearch("dune");
+      first.addRecentSearch("inception");
+      first.clearRecentSearches();
+      expect([...first.recentSearches()]).toEqual([]);
+      await first.suspend();
+
+      const second = await Application.create({ freshConfig: true });
+      expect([...second.recentSearches()]).toEqual([]);
+      await second.suspend();
+    } finally {
+      if (prev === undefined) delete process.env.TORNEDO_STATE_DIR;
+      else process.env.TORNEDO_STATE_DIR = prev;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

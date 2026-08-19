@@ -23,6 +23,11 @@ export interface TorrentClientAdd {
   destination: string;
   /** Extra announce URLs appended to every add. */
   announce?: string[];
+  /**
+   * Start with every file deselected (nothing downloads) until `selectFiles`
+   * is called. Used so the user can pick files before any data is fetched.
+   */
+  startDeselected?: boolean;
 }
 
 export interface SpeedLimits {
@@ -47,8 +52,15 @@ export interface TorrentClient {
   resume(id: string): void;
   /** Tear down a torrent handle. */
   remove(id: string): void;
-  /** Latest stats for a torrent, or null when unknown. */
+/** Latest stats for a torrent, or null when unknown. */
   get(id: string): TorrentStats | null;
+  /**
+   * Restrict the torrent to only the listed files (relative torrent paths).
+   * Files not in the list are deselected and stop downloading. Passing an
+   * empty list restores the default (select everything). Safe to call before
+   * metadata arrives — the selection is applied once files are known.
+   */
+  selectFiles(id: string, paths: string[]): void;
   /** Re-announce the existing handle without restarting the torrent. */
   retryMetadata(id: string): void;
   /** Aggregate client stats. */

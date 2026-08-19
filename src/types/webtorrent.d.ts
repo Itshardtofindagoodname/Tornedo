@@ -4,11 +4,17 @@
 declare module "webtorrent" {
   import type { EventEmitter } from "node:events";
 
-  interface TorrentFile {
+  interface File {
     name: string;
     path: string;
     length: number;
     offset: number;
+    /** 0..1 — fraction of the file's bytes currently on disk. */
+    progress: number;
+    /** True once every piece of this file is verified. */
+    done: boolean;
+    select(priority?: number): void;
+    deselect(): void;
     stream(opts?: { start?: number; end?: number }): NodeJS.ReadableStream;
   }
 
@@ -29,7 +35,7 @@ declare module "webtorrent" {
     done: boolean;
     paused: boolean;
     path: string;
-    files: TorrentFile[];
+    files: File[];
     announce: string[];
     pause(): void;
     resume(): void;
@@ -50,6 +56,8 @@ declare module "webtorrent" {
     path?: string;
     announce?: string[];
     destroyStoreOnDestroy?: boolean;
+    /** Start with every file deselected so nothing downloads until selected. */
+    deselect?: boolean;
   }
 
   interface WebTorrentOptions {
@@ -80,5 +88,5 @@ declare module "webtorrent" {
   }
 
   export default WebTorrent;
-  export type { Torrent, TorrentFile, TorrentOptions, WebTorrentOptions };
+  export type { Torrent, File, TorrentOptions, WebTorrentOptions };
 }

@@ -122,6 +122,14 @@ export const MIGRATIONS: readonly Migration[] = [
       );
     },
   },
+  {
+    version: 6,
+    name: "per-torrent file selection",
+    up(db) {
+      // JSON array of relative file paths; NULL/empty means "download everything".
+      db.exec(`ALTER TABLE torrents ADD COLUMN selected_files TEXT;`);
+    },
+  },
 ];
 
 export function latestSchemaVersion(): number {

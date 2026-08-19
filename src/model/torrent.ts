@@ -133,11 +133,21 @@ export interface TorrentStats {
   ready: boolean;
 }
 
+/** One file inside a torrent, once metadata is known. */
+export interface TorrentFileInfo {
+  /** Relative path inside the torrent (e.g. "subs/en.srt"). */
+  path: string;
+  /** Size in bytes. */
+  length: number;
+}
+
 /** Metadata about a torrent after its metadata parses. */
 export interface TorrentMeta {
   name: string;
   total: number;
   files: number;
+  /** Per-file listing (path + length), present once metadata is known. */
+  fileList?: TorrentFileInfo[];
   /** Raw .torrent bencode, persisted for re-seeding. */
   torrentFile?: Uint8Array;
 }
@@ -184,6 +194,19 @@ export interface TorrentItem {
   error: string | null;
   /** Number of files once metadata is known. */
   files: number | null;
+  /** Per-file listing once metadata is known. */
+  fileList?: TorrentFileInfo[] | null;
+  /**
+   * Subset of file paths to download (relative torrent paths). When set, only
+   * these files are selected in the engine; everything else is skipped. Absent
+   * (or empty) means "the whole torrent".
+   */
+  selectedFiles?: string[] | null;
+  /**
+   * Transient (not persisted): the engine starts this torrent fully deselected
+   * so nothing downloads until the user picks files. Consumed on first start.
+   */
+  startDeselected?: boolean;
   diagnostics?: TorrentDiagnostics;
 }
 
@@ -200,6 +223,16 @@ export interface AddTorrentInput {
   priority?: number;
   seedEnabled?: boolean;
   size?: number;
+  /**
+   * Restrict the download to these file paths (relative torrent paths). When
+   * present the torrent starts deselected and only the listed files download.
+   */
+  selectedFiles?: string[];
+  /**
+   * Start with every file deselected (nothing downloads until a selection is
+   * applied). Used to preview files before committing to the download.
+   */
+  startDeselected?: boolean;
 }
 
 /** Summary counts for the downloads view. */

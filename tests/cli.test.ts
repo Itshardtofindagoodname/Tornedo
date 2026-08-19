@@ -8,6 +8,7 @@ import { defaultArgs } from "../src/cli/args.js";
 import { CliContext } from "../src/cli/context.js";
 import { runSearch } from "../src/cli/commands/search.js";
 import { runDownloads } from "../src/cli/commands/downloads.js";
+import { runHistory } from "../src/cli/commands/history.js";
 import { fakeSource, result, FakeClient } from "./helpers/fixtures.js";
 import type { TorrentManager } from "../src/downloads/manager.js";
 
@@ -81,6 +82,8 @@ function makeCtx(args: Partial<CliArgs> = {}): { ctx: CliContext; out: string[] 
     updateConfig: async () => {},
     suspend: async () => {},
     store: null,
+    recentSearches: () => ["dune", "inception"],
+    clearRecentSearches: () => {},
   } as unknown as Application;
 
   const full = { ...defaultArgs(), ...args };
@@ -127,5 +130,23 @@ describe("CLI commands", () => {
     await runDownloads(ctx);
     const parsed = JSON.parse(out.join("\n"));
     expect(Array.isArray(parsed)).toBe(true);
+  });
+
+  it("history lists recent searches", async () => {
+    const { ctx, out } = makeCtx({ command: "history" });
+    const count = await runHistory(ctx);
+    expect(count).toBe(2);
+    expect(out.join("\n")).toContain("dune");
+    expect(out.join("\n")).toContain("inception");
+  });
+
+  it("history --clear wipes them and reports cleared", async () => {
+    const cleared: string[] = [];
+    const { ctx, out } = makeCtx({ command: "history", clear: true });
+    ctx.app.clearRecentSearches = () => cleared.push("cleared");
+    const count = await runHistory(ctx);
+    expect(count).toBe(0);
+    expect(cleared).toEqual(["cleared"]);
+    expect(out.join("\n")).toContain("cleared");
   });
 });

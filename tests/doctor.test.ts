@@ -35,6 +35,7 @@ function fakeClient(): TorrentClient {
     remove: () => {},
     get: () => null,
     retryMetadata: () => {},
+    selectFiles: () => {},
     stats: () => ({ downloadSpeed: 0, uploadSpeed: 0, active: 0 }),
     setSpeedLimits: () => {},
     listenPort: () => 6881,

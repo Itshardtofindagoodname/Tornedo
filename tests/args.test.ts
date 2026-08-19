@@ -55,4 +55,29 @@ describe("parseArgs", () => {
   it("throws on missing flag value", () => {
     expect(() => parseArgs(["search", "--limit"])).toThrow(CliArgError);
   });
+
+  it("parses the new commands", () => {
+    expect(parseArgs(["history"]).command).toBe("history");
+    expect(parseArgs(["history", "--clear"]).command).toBe("history");
+    expect(parseArgs(["files", "x.torrent"]).command).toBe("files");
+    expect(parseArgs(["clear"]).command).toBe("clear");
+    expect(parseArgs(["uninstall"]).command).toBe("uninstall");
+    expect(parseArgs(["uninstall", "--clear"]).command).toBe("uninstall");
+  });
+
+  it("parses --clear without a command", () => {
+    const args = parseArgs(["--clear"]);
+    expect(args.command).toBeNull();
+    expect(args.clear).toBe(true);
+  });
+
+  it("parses --yes and -y", () => {
+    expect(parseArgs(["clear", "--yes"]).yes).toBe(true);
+    expect(parseArgs(["uninstall", "-y"]).yes).toBe(true);
+  });
+
+  it("parses --select as repeatable and comma-separated", () => {
+    const args = parseArgs(["file", "x.torrent", "--select", "a.mkv", "--select", "subs/en.srt,b.mp4"]);
+    expect(args.select).toEqual(["a.mkv", "subs/en.srt", "b.mp4"]);
+  });
 });

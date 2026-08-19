@@ -2,6 +2,41 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.1.0] - 2026-08-19
+
+### Clean uninstall
+
+- **`tornedo --clear` / `tornedo clear`** deletes every downloaded file tracked
+  by Tornedo and wipes the local state (database, config, watch state, recent
+  search history) so the installation is ready for a clean uninstall.
+- **`tornedo uninstall`** uninstalls the global `tornedo` npm package, and
+  `tornedo uninstall --clear` wipes all downloads and state first. Destructive
+  commands ask for confirmation on a TTY and can be skipped with `-y`/`--yes`.
+
+### File selection
+
+- **Choose files before downloading** (like qBittorrent): the new
+  `tornedo files <input>` command lists a torrent's files without downloading
+  anything, and `tornedo file|magnet|infohash --select <paths>` downloads only
+  the given files. In the TUI, `shift+f` opens a file-picker overlay for the
+  selected result — every file is checked by default and optional extras can be
+  unchecked (space toggle · `a` all · `n` none) before committing. Unselected
+  files are never fetched by the engine.
+- Partial downloads are detected correctly: a torrent is considered complete
+  when all *selected* files finish, even when extras were skipped.
+
+### Search history
+
+- New `tornedo history` command lists recent searches and
+  `tornedo history --clear` empties them.
+
+### Chores
+
+- Bumped the published version to 2.1.0 (and re-synced the reported
+  `tornedo --version` with the package version).
+- `tornedo downloads` and add/download output now include `selectedFiles` and
+  `fileCount`.
+
 ## [1.1.0] - 2026-08-18
 
 ### Install experience

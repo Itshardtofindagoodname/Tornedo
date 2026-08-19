@@ -109,8 +109,9 @@ describe("TorrentManager", () => {
       pause: () => {},
       resume: () => {},
       remove: () => {},
-      get: () => null,
+get: () => null,
       retryMetadata: () => {},
+      selectFiles: () => {},
       stats: () => ({ downloadSpeed: 0, uploadSpeed: 0, active: 0 }),
       setSpeedLimits: () => {},
       listenPort: () => null,
@@ -331,6 +332,81 @@ describe("TorrentManager", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe("file selection", () => {
+    it("starts deselected when requested, then applies a selection", async () => {
+      const client = new ManualClient();
+      const { manager } = makeManager(client, { seedAfterComplete: false });
+      await manager.init();
+      manager.add({
+        infohash: HASH_A,
+        magnet: `magnet:?xt=urn:btih:${HASH_A}`,
+        name: "A",
+        startDeselected: true,
+      });
+      const added = client.adds.get(HASH_A)!;
+      expect(added.startDeselected).toBe(true);
+
+      client.fireMetadata(HASH_A, {
+        name: "A",
+        total: 100,
+        files: 2,
+        fileList: [
+          { path: "movie.mkv", length: 80 },
+          { path: "extras/featurette.mkv", length: 20 },
+        ],
+      });
+      expect(manager.get(HASH_A)!.status).toBe("ready");
+      expect(manager.get(HASH_A)!.fileList).toHaveLength(2);
+
+      manager.setFileSelection(HASH_A, ["movie.mkv"]);
+      const item = manager.get(HASH_A)!;
+      expect(item.selectedFiles).toEqual(["movie.mkv"]);
+      await manager.suspend();
+    });
+
+    it("rejects a selection that matches no files", async () => {
+      const client = new ManualClient();
+      const { manager } = makeManager(client, { seedAfterComplete: false });
+      await manager.init();
+      manager.add({ infohash: HASH_A, magnet: `magnet:?xt=urn:btih:${HASH_A}`, name: "A" });
+      client.fireMetadata(HASH_A, {
+        name: "A",
+        total: 100,
+        files: 1,
+        fileList: [{ path: "movie.mkv", length: 100 }],
+      });
+      manager.setFileSelection(HASH_A, ["missing.mkv"]);
+      expect(manager.get(HASH_A)!.selectedFiles).toBeNull();
+      expect(manager.get(HASH_A)!.error).toMatch(/no selected files match/i);
+      await manager.suspend();
+    });
+
+    it("persists the selection and restores it", async () => {
+      const client = new ManualClient();
+      const { manager, store } = makeManager(client, { seedAfterComplete: false });
+      await manager.init();
+      manager.add({ infohash: HASH_A, magnet: `magnet:?xt=urn:btih:${HASH_A}`, name: "A" });
+      client.fireMetadata(HASH_A, {
+        name: "A",
+        total: 100,
+        files: 2,
+        fileList: [
+          { path: "movie.mkv", length: 80 },
+          { path: "extras/featurette.mkv", length: 20 },
+        ],
+      });
+      manager.setFileSelection(HASH_A, ["movie.mkv"]);
+      await flush();
+      expect(store.get(HASH_A)!.selectedFiles).toEqual(["movie.mkv"]);
+      await manager.suspend();
+
+      const revived = new TorrentManager({ client, store, getConfig: () => defaultConfig() });
+      await revived.init();
+      expect(revived.get(HASH_A)!.selectedFiles).toEqual(["movie.mkv"]);
+      await revived.suspend();
     });
   });
 });

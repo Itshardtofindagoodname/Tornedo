@@ -17,7 +17,7 @@
  *   WebTorrent internals are used.
  */
 import WebTorrent from "webtorrent";
-import type { Torrent } from "webtorrent";
+import type { File, Torrent } from "webtorrent";
 import type { TorrentDiagnostics, TorrentMeta, TorrentStats } from "../model/torrent.js";
 import type {
   ClientStats,
@@ -95,6 +95,10 @@ export class WebTorrentClient implements TorrentClient {
   private limits: SpeedLimits;
   private dht: DhtLike | null;
   private dhtState: DhtSnapshot;
+  /** Per-torrent subset of file paths the user chose (relative torrent paths). */
+  private selectedPaths = new Map<string, Set<string>>();
+  /** Torrents whose selected subset already fired onDone (guard against repeats). */
+  private selectedDone = new Set<string>();
 
   constructor(opts: WebTorrentClientOptions = {}) {
     this.announce = opts.announce ?? [];
@@ -227,9 +231,11 @@ export class WebTorrentClient implements TorrentClient {
       }
     }
 
-    const opts: { path: string; announce?: string[] } = { path: input.destination };
+    const opts: { path: string; announce?: string[]; deselect?: boolean } = { path: input.destination };
     const announce = mergeTrackers(input.announce ?? [], this.announce);
     if (announce.length > 0) opts.announce = announce;
+    if (input.startDeselected) opts.deselect = true;
+    this.selectedDone.delete(input.id);
 
     let torrent: Torrent;
     try {
@@ -297,12 +303,19 @@ export class WebTorrentClient implements TorrentClient {
         nextRetry: null,
         lastEvent: "torrent metadata received",
       });
+      const fileList = torrent.files?.map((f) => ({ path: f.path, length: f.length })) ?? [];
       handlers.onMetadata(input.id, {
         name: torrent.name,
         total: torrent.length,
         files: torrent.files?.length ?? 0,
+        fileList,
         torrentFile: torrent.torrentFile,
       });
+      // A selection may have been requested before metadata resolved: apply it
+      // now that the file list is known (keeps the engine from downloading the
+      // deselected files).
+      const pending = this.selectedPaths.get(input.id);
+      if (pending && pending.size > 0) this.applySelection(input.id, torrent, pending);
     });
     torrent.on("done", () => {
       handlers.onDone(input.id);
@@ -377,9 +390,64 @@ export class WebTorrentClient implements TorrentClient {
     const t = this.torrents.get(id);
     this.torrents.delete(id);
     this.handlers.delete(id);
+    this.selectedPaths.delete(id);
+    this.selectedDone.delete(id);
     if (t) {
       try {
         t.destroy();
+      } catch {
+        /* noop */
+      }
+    }
+  }
+
+  selectFiles(id: string, paths: string[]): void {
+    const wanted = new Set(paths.filter((p) => p.length > 0));
+    if (wanted.size === 0) {
+      // Empty selection = download the whole torrent.
+      this.selectedPaths.delete(id);
+      this.selectedDone.delete(id);
+      const torrent = this.torrents.get(id);
+      if (torrent?.files && torrent.files.length > 0) {
+        for (const f of torrent.files as File[]) {
+          if (f.length === 0) continue;
+          try {
+            f.select();
+          } catch {
+            /* noop */
+          }
+        }
+      }
+      return;
+    }
+    this.selectedPaths.set(id, wanted);
+    this.selectedDone.delete(id);
+    const torrent = this.torrents.get(id);
+    if (torrent?.files && torrent.files.length > 0) {
+      this.applySelection(id, torrent, wanted);
+    }
+  }
+
+  /**
+   * Select only `wanted` files and deselect everything else. Zero matches falls
+   * back to the default (select all) so a typo can never leave a torrent that
+   * downloads nothing and never completes.
+   */
+  private applySelection(id: string, torrent: Torrent, wanted: ReadonlySet<string>): void {
+    const files = torrent.files as File[];
+    if (files.length === 0) return;
+    const matches = files.filter((f) => wanted.has(f.path));
+    if (matches.length === 0) {
+      this.selectedPaths.delete(id);
+      this.handlers.get(id)?.onWarning(id, `no files matched the selection — downloading the whole torrent`);
+      return;
+    }
+    const selected = new Set(matches.map((f) => f.path));
+    for (const f of files) {
+      if (f.length === 0) continue;
+      try {
+        if (selected.has(f.path)) f.select();
+        else f.deselect();
       } catch {
         /* noop */
       }
@@ -420,7 +488,46 @@ export class WebTorrentClient implements TorrentClient {
     } catch {
       // Partial numbers beat a dead poller.
     }
+    // With a file subset selected, report progress over the chosen files only:
+    // the whole-torrent numbers never reach 1 for a partial download.
+    const wanted = this.selectedPaths.get(id);
+    const files = t.files as File[] | undefined;
+    if (wanted && wanted.size > 0 && files && files.length > 0) {
+      const subset = files.filter((f) => wanted.has(f.path));
+      if (subset.length > 0) {
+        let total = 0;
+        let downloaded = 0;
+        for (const f of subset) {
+          total += f.length;
+          downloaded += Math.round((f.progress || 0) * f.length);
+        }
+        s.total = total;
+        s.downloaded = downloaded;
+        s.progress = total > 0 ? Math.min(1, downloaded / total) : 1;
+        if (s.progress >= 1) this.fireSelectedDone(id);
+      }
+    }
     return s;
+  }
+
+  /**
+   * WebTorrent only emits the torrent-level `done` event when *every* file is
+   * done, so a partial (deselected) download would never complete on its own.
+   * Detect completion of the selected subset from the polled per-file state.
+   */
+  private fireSelectedDone(id: string): void {
+    if (this.selectedDone.has(id)) return;
+    const t = this.torrents.get(id);
+    const wanted = this.selectedPaths.get(id);
+    if (!t || !wanted || wanted.size === 0) return;
+    const files = t.files as File[] | undefined;
+    if (!files || files.length === 0) return;
+    const subset = files.filter((f) => wanted.has(f.path));
+    if (subset.length === 0) return;
+    if (subset.every((f) => f.done)) {
+      this.selectedDone.add(id);
+      this.handlers.get(id)?.onDone(id);
+    }
   }
 
   retryMetadata(id: string): void {
@@ -516,6 +623,8 @@ export class WebTorrentClient implements TorrentClient {
   destroy(): void {
     this.torrents.clear();
     this.handlers.clear();
+    this.selectedPaths.clear();
+    this.selectedDone.clear();
     // Never block shutdown on webtorrent's async teardown: hand off to a later
     // tick and let the OS reclaim sockets if we exit first.
     const client = this.client;

@@ -174,7 +174,9 @@ export class FakeClient implements TorrentClient {
     return this.adds.has(id) ? makeTorrentStats({ progress: 1, downloaded: 100 }) : null;
   }
 
-  retryMetadata(_id: string): void {}
+retryMetadata(_id: string): void {}
+
+  selectFiles(_id: string, _paths: string[]): void {}
 
   stats(): ClientStats {
     return { downloadSpeed: 0, uploadSpeed: 0, active: this.adds.size };
@@ -224,11 +226,12 @@ export class ManualClient implements TorrentClient {
     this.handlers.get(id)?.onError(id, message);
   }
 
-  fireMetadata(id: string, meta: { name: string; total: number; files?: number }): void {
+  fireMetadata(id: string, meta: { name: string; total: number; files?: number; fileList?: { path: string; length: number }[] }): void {
     this.handlers.get(id)?.onMetadata(id, {
       name: meta.name,
       total: meta.total,
       files: meta.files ?? 1,
+      fileList: meta.fileList,
     });
   }
 
@@ -259,6 +262,8 @@ export class ManualClient implements TorrentClient {
   retryMetadata(id: string): void {
     this.retried.add(id);
   }
+
+  selectFiles(_id: string, _paths: string[]): void {}
 
   stats(): ClientStats {
     return { downloadSpeed: 0, uploadSpeed: 0, active: this.adds.size };

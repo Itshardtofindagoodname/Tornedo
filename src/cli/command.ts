@@ -5,9 +5,12 @@ import { APP_NAME, VERSION } from "../version.js";
 import type { CliContext } from "./context.js";
 import { USAGE } from "./help.js";
 import { runAdd } from "./commands/add.js";
+import { runClear, runUninstall } from "./commands/clear.js";
 import { runConfig } from "./commands/config.js";
 import { runDoctorCommand } from "./commands/doctor.js";
 import { runDownloads } from "./commands/downloads.js";
+import { runFiles } from "./commands/files.js";
+import { runHistory } from "./commands/history.js";
 import { runSearch } from "./commands/search.js";
 import { runSources } from "./commands/sources.js";
 import { runWatch } from "./commands/watch.js";
@@ -19,6 +22,7 @@ export async function dispatch(ctx: CliContext): Promise<number> {
   switch (cmd) {
     case null:
     case "tui":
+      if (ctx.args.clear) return runClear(ctx);
       return runTui(ctx);
     case "search":
       return runSearch(ctx, positional[0] ?? "");
@@ -36,6 +40,14 @@ export async function dispatch(ctx: CliContext): Promise<number> {
       return runSources(ctx);
     case "doctor":
       return runDoctorCommand(ctx);
+    case "files":
+      return runFiles(ctx, positional[0] ?? "");
+    case "history":
+      return runHistory(ctx);
+    case "clear":
+      return runClear(ctx);
+    case "uninstall":
+      return runUninstall(ctx);
     case "help":
       ctx.stdout(USAGE);
       return 0;

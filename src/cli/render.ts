@@ -113,6 +113,8 @@ export function torrentToJson(it: TorrentItem): Record<string, unknown> {
     seedEnabled: it.seedEnabled,
     destination: it.destination,
     sourceId: it.sourceId,
+    selectedFiles: it.selectedFiles ?? null,
+    fileCount: it.fileList?.length ?? it.files ?? null,
     error: it.error,
     addedAt: it.queuedAt,
   };

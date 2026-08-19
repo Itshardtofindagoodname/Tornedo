@@ -12,6 +12,10 @@ export const COMMANDS = [
   "watch",
   "sources",
   "doctor",
+  "files",
+  "history",
+  "clear",
+  "uninstall",
   "help",
   "version",
   "tui",
@@ -34,6 +38,12 @@ export interface CliArgs {
   priority: number | null;
   category: string | null;
   check: boolean;
+  /** `--clear`: wipe downloads and local state (clean-uninstall prep). */
+  clear: boolean;
+  /** `--yes`: skip confirmation prompts for destructive commands. */
+  yes: boolean;
+  /** `--select <path>`: restrict a download to the given files (repeatable). */
+  select: string[];
 }
 
 export function defaultArgs(): CliArgs {
@@ -52,6 +62,9 @@ export function defaultArgs(): CliArgs {
     priority: null,
     category: null,
     check: false,
+    clear: false,
+    yes: false,
+    select: [],
   };
 }
 
@@ -138,6 +151,18 @@ export function parseArgs(argv: readonly string[]): CliArgs {
         case "check":
           args.check = true;
           break;
+        case "clear":
+          args.clear = true;
+          break;
+        case "yes":
+          args.yes = true;
+          break;
+        case "select":
+          for (const part of next().split(",")) {
+            const p = part.trim();
+            if (p.length > 0) args.select.push(p);
+          }
+          break;
         default:
           throw new CliArgError(`Unknown flag --${name}`);
       }
@@ -158,6 +183,9 @@ export function parseArgs(argv: readonly string[]): CliArgs {
             break;
           case "V":
             args.version = true;
+            break;
+          case "y":
+            args.yes = true;
             break;
           default:
             throw new CliArgError(`Unknown flag -${ch}`);

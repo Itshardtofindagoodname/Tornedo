@@ -28,6 +28,12 @@ export interface TorrentManagerOptions {
   client: TorrentClient;
   store: TorrentStore;
   getConfig(): TornedoConfig;
+  /**
+   * When false, `init()` loads persisted items into memory but does not start
+   * timers or resume downloads. Used by destructive commands (`--clear`,
+   * `uninstall`) that only need to enumerate and delete items.
+   */
+  restoreOnInit?: boolean;
 }
 
 export interface TorrentManagerEvents {
@@ -56,12 +62,14 @@ private strayHits = new Map<string, number>();
   private stalledSince = new Map<string, number>();
   private disposed = false;
   private recovery: RecoveryReport | null = null;
+  private restoreOnInit: boolean;
 
   constructor(opts: TorrentManagerOptions) {
     super();
     this.client = opts.client;
     this.store = opts.store;
     this.getConfig = opts.getConfig;
+    this.restoreOnInit = opts.restoreOnInit ?? true;
   }
 
   override on(event: "update", listener: () => void): this;
@@ -95,6 +103,11 @@ private strayHits = new Map<string, number>();
     this.store.setRunMarker();
     if (crashed) {
       this.recoverAfterCrash();
+    }
+    if (!this.restoreOnInit) {
+      // Destructive commands only enumerate items; do not start downloads or
+      // timers.
+      return;
     }
     this.restore();
     this.startTimers();
@@ -324,6 +337,9 @@ const item: TorrentItem = {
       lastUpdated: Date.now(),
       error: null,
       files: null,
+      fileList: null,
+      selectedFiles: input.selectedFiles && input.selectedFiles.length > 0 ? [...input.selectedFiles] : null,
+      startDeselected: input.startDeselected ?? false,
       diagnostics: initialDiagnostics(input.magnet, infohash),
     };
     if (process.env.TORNEDO_DIAGNOSTICS === "1") {
@@ -361,12 +377,17 @@ const item: TorrentItem = {
     if (started) this.changed();
   }
 
-  private startItem(item: TorrentItem): void {
+private startItem(item: TorrentItem): void {
     this.setStatus(item, "waiting_metadata");
     item.error = null;
     item.startedAt = Date.now();
     this.startedAt.set(item.id, Date.now());
     const handlers = this.handlersFor(item.id);
+    // A file selection (or an explicit deselected start) means only the chosen
+    // files download; start the torrent fully deselected so nothing is fetched
+    // before the selection is applied (which happens when metadata arrives).
+    const startDeselected = item.startDeselected === true || (item.selectedFiles?.length ?? 0) > 0;
+    item.startDeselected = false;
     try {
       this.client.add(
         {
@@ -374,6 +395,7 @@ const item: TorrentItem = {
           source: item.magnet,
           destination: item.destination,
           announce: [...PUBLIC_TRACKERS],
+          startDeselected,
         },
         handlers,
       );
@@ -393,7 +415,13 @@ onMetadata: (_id, meta) => {
           it.size = meta.total;
         }
         it.files = meta.files;
+        if (meta.fileList) it.fileList = meta.fileList;
         if (meta.torrentFile) this.store.saveCache(id, meta.torrentFile);
+        // A persisted/requested file selection is re-applied now that the file
+        // list is known, so deselected files are never fetched.
+        if (it.selectedFiles && it.selectedFiles.length > 0) {
+          this.client.selectFiles(id, it.selectedFiles);
+        }
         it.diagnostics = { ...it.diagnostics!, metadata: "received", nextRetry: null, connection: "downloading", lastEvent: "torrent metadata received" };
         // Metadata (and the store) are ready: the item is READY, not yet
         // DOWNLOADING. The poller promotes it once bytes actually flow.
@@ -640,6 +668,38 @@ if (it.status !== "downloading" && it.status !== "starting" && it.status !== "wa
       this.setSeedEnabled(id, true);
       this.resumeSeeding(id);
     }
+  }
+
+  /**
+   * Restrict a torrent to the given file paths (relative torrent paths). Files
+   * not listed stop downloading immediately; a torrent that is still resolving
+   * metadata applies the selection the moment files are known. Passing an empty
+   * list clears the selection and downloads the whole torrent.
+   */
+  setFileSelection(id: string, paths: string[]): void {
+    const it = this.items.get(id);
+    if (!it) return;
+    const cleaned = [...new Set(paths.filter((p) => p.trim().length > 0))];
+    const known = it.fileList ?? [];
+    if (known.length > 0 && cleaned.length > 0) {
+      const matched = known.filter((f) => cleaned.includes(f.path));
+      if (matched.length === 0) {
+        it.error = "No selected files match this torrent's file list — selection kept as-is.";
+        this.changed();
+        return;
+      }
+    }
+    if (cleaned.length === 0) {
+      // Clearing a selection re-selects the whole torrent (also restarts the
+      // download for a READY item that had been waiting for the file pick).
+      this.client.selectFiles(id, []);
+    } else {
+      this.client.selectFiles(id, cleaned);
+    }
+    it.selectedFiles = cleaned.length > 0 ? cleaned : null;
+    it.lastUpdated = Date.now();
+    this.markDirty(id, { persist: true });
+    this.changed();
   }
 
   pauseSeeding(id: string): void {

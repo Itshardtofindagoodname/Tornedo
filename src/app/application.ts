@@ -29,6 +29,12 @@ export interface ApplicationOptions {
   memoryDb?: boolean;
   /** Custom torrent client (tests). */
   client?: TorrentClient;
+  /**
+   * When false, persisted downloads are loaded into memory but not resumed and
+   * no timers are started. Used by destructive commands (`--clear`,
+   * `uninstall`) that must enumerate items without touching the network.
+   */
+  autoResume?: boolean;
 }
 
 export class Application {
@@ -65,6 +71,7 @@ export class Application {
       client: this.client,
       store: this.store,
       getConfig: () => this.configState,
+      restoreOnInit: opts.autoResume ?? true,
     });
 
     this.rebuildSources();
@@ -176,6 +183,12 @@ export class Application {
     const next = [text, ...this.recentSearches().filter((x) => x !== text)].slice(0, MAX_RECENT_SEARCHES);
     this.recentSearchesCache = next;
     this.store.metaSet(RECENT_SEARCHES_KEY, JSON.stringify(next));
+  }
+
+  /** Forget the persisted recent-search history. */
+  clearRecentSearches(): void {
+    this.recentSearchesCache = [];
+    this.store.metaDelete(RECENT_SEARCHES_KEY);
   }
 
   /** Close everything, preserving download state. Safe to call once. */
