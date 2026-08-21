@@ -14,9 +14,9 @@ export const palette = {
   surfaceAlt: "#1c1c22",
   border: "#26262e",
   text: "#e8e8ea",
-  subtext: "#d4b44a",
-  dim: "#c9a33a",
-  faint: "#a88530",
+  subtext: "#e8cc60",
+  dim: "#ddb844",
+  faint: "#cea038",
 
   /** Warm electric yellow — the Tornedo lightning accent. */
   accent: "#f2c14e",
