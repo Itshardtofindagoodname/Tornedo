@@ -4,8 +4,8 @@
  *
  * `clear` deletes every downloaded file tracked by Tornedo and wipes the local
  * state (database, config, watch state), leaving a clean slate for people who
- * want a clean uninstall. `uninstall` additionally removes the global `tornedo`
- * npm package so users no longer have to remember `npm uninstall -g tornedo`.
+ * want a clean uninstall. `uninstall` additionally removes the global tornedo
+ * package via whichever package manager (npm, pnpm, yarn, bun) it was run from.
  */
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
@@ -42,7 +42,8 @@ export async function runUninstall(ctx: CliContext): Promise<number> {
   const clearText = ctx.args.clear
     ? " delete every downloaded file and wipe all tornedo state, then"
     : "";
-  const confirmed = await confirmYes(ctx, `Uninstall tornedo? This will${clearText} remove the global npm package.`);
+  const pm = detectPackageManager();
+  const confirmed = await confirmYes(ctx, `Uninstall tornedo? This will${clearText} remove the global package via ${pm}.`);
   if (!confirmed) {
     ctx.err("Cancelled.");
     return 1;
@@ -65,12 +66,12 @@ export async function runUninstall(ctx: CliContext): Promise<number> {
     ctx.log(report
       ? `Cleared ${report.downloadsDeleted} downloads and wiped state.`
       : "Proceeding without clearing local state.");
-    ctx.log("Running: npm uninstall -g tornedo");
+    ctx.log(`Running: ${pm} ${uninstallArgs(pm).join(" ")}`);
   }
 
   const code = await uninstallPackage(ctx);
   if (code !== 0) {
-    ctx.err(`npm uninstall failed (exit ${code}). You can retry manually with: npm uninstall -g tornedo`);
+    ctx.err(`${pm} uninstall failed (exit ${code}). You can retry manually with: ${pm} ${uninstallArgs(pm).join(" ")}`);
     return code;
   }
   if (!ctx.args.json) {
@@ -105,14 +106,37 @@ export async function wipeStateDir(): Promise<void> {
   await fs.rm(root, { recursive: true, force: true });
 }
 
+type PkgManager = "npm" | "pnpm" | "yarn" | "bun";
+
+function detectPackageManager(): PkgManager {
+  const agent = (process.env.npm_config_user_agent ?? "").toLowerCase();
+  if (agent.startsWith("pnpm/")) return "pnpm";
+  if (agent.startsWith("yarn/")) return "yarn";
+  if (agent.startsWith("bun/")) return "bun";
+  return "npm";
+}
+
+function uninstallArgs(pm: PkgManager): string[] {
+  switch (pm) {
+    case "yarn":
+      return ["global", "remove", "tornedo"];
+    case "pnpm":
+    case "bun":
+    case "npm":
+    default:
+      return ["uninstall", "-g", "tornedo"];
+  }
+}
+
 function uninstallPackage(ctx: CliContext): Promise<number> {
+  const pm = detectPackageManager();
   return new Promise((resolve) => {
-    const child = spawn("npm", ["uninstall", "-g", "tornedo"], {
+    const child = spawn(pm, uninstallArgs(pm), {
       stdio: ["ignore", "inherit", "inherit"],
       shell: process.platform === "win32",
     });
     child.on("error", (e) => {
-      ctx.err(`could not start npm: ${e.message}`);
+      ctx.err(`could not start ${pm}: ${e.message}`);
       resolve(1);
     });
     child.on("close", (code) => resolve(code ?? 0));
