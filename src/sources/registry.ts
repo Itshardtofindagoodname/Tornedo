@@ -5,11 +5,22 @@
 import type { SourceAdapter } from "../model/source.js";
 import { bittorrented } from "./bittorrented.js";
 import { eztv } from "./eztv.js";
-import { limeTorrentsMusic, torrentDownloadsMusic, torrentGalaxyMusic } from "./fallback-music.js";
+import {
+  limeTorrentsMusic,
+  limeTorrentsMovies,
+  limeTorrentsTv,
+  torrentDownloadsMusic,
+  torrentDownloadsMovies,
+  torrentDownloadsTv,
+  torrentGalaxyMusic,
+  torrentGalaxyMovies,
+  torrentGalaxyTv,
+} from "./fallback-music.js";
 import { fitgirl } from "./fitgirl.js";
 import { nyaa } from "./nyaa.js";
 import { piratebayMovies, piratebayMusic, piratebayTv } from "./piratebay.js";
 import { subsplease } from "./subsplease.js";
+import { solidtorrents } from "./solidtorrents.js";
 import { x1337Movies, x1337Music, x1337Tv } from "./x1337.js";
 import { yts } from "./yts.js";
 
@@ -19,6 +30,7 @@ export const SOURCES: readonly SourceAdapter[] = [
   piratebayMovies,
   x1337Movies,
   eztv,
+  solidtorrents,
   piratebayTv,
   x1337Tv,
   nyaa,
@@ -27,8 +39,14 @@ export const SOURCES: readonly SourceAdapter[] = [
   piratebayMusic,
   x1337Music,
   limeTorrentsMusic,
+  limeTorrentsMovies,
+  limeTorrentsTv,
   torrentGalaxyMusic,
+  torrentGalaxyMovies,
+  torrentGalaxyTv,
   torrentDownloadsMusic,
+  torrentDownloadsMovies,
+  torrentDownloadsTv,
 ];
 
 export function getSource(id: string): SourceAdapter | undefined {

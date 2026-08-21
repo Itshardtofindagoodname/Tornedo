@@ -6,10 +6,10 @@
  */
 import type { MediaCategory, SearchResult } from "../model/search.js";
 import type { SearchContext, SourceAdapter } from "../model/source.js";
-import { fetchJson, HttpError } from "./net.js";
+import { fetchJsonFromFirstMirror, HttpError } from "./net.js";
 import { buildMagnet, normalizeInfoHash } from "../torrent/parse.js";
 
-const API = "https://eztvx.to/api/get-torrents";
+const MIRRORS = ["eztvx.to", "eztv1.xyz", "eztv.wf", "eztv.tf"];
 const PAGE_SIZE = 100;
 
 const CATEGORY: MediaCategory = "TV";
@@ -30,11 +30,16 @@ interface EztvResponse {
 }
 
 export async function search(query: string, ctx: SearchContext): Promise<SearchResult[]> {
-  const res = await fetchJson<EztvResponse>(`${API}?limit=${PAGE_SIZE}&page=1`, {
-    signal: ctx.signal,
-    timeoutMs: ctx.timeoutMs,
-    retries: 1,
-  });
+  // All mirrors are raced concurrently: a hanging domain can no longer consume
+  // the source's whole timeout budget before a fallback is ever contacted.
+  const res = await fetchJsonFromFirstMirror<EztvResponse>(
+    MIRRORS.map((mirror) => `https://${mirror}/api/get-torrents?limit=${PAGE_SIZE}&page=1`),
+    {
+      signal: ctx.signal,
+      timeoutMs: Math.min(ctx.timeoutMs, 8_000),
+      retries: 0,
+    },
+  );
   if (!res || !Array.isArray(res.torrents)) throw new HttpError(0, "EZTV returned an invalid response");
 
   const q = query.trim().toLowerCase();

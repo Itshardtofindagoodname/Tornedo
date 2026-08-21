@@ -5,12 +5,11 @@
  */
 import type { MediaCategory, SearchResult } from "../model/search.js";
 import type { SearchContext, SourceAdapter } from "../model/source.js";
-import { fetchText, HttpError, ParseError } from "./net.js";
+import { fetchFromFirstMirror, fetchText, HttpError, ParseError } from "./net.js";
 import { unescapeEntities } from "./rss.js";
 import { buildMagnet, normalizeInfoHash } from "../torrent/parse.js";
 
 const HOSTS = ["1337x.to", "1337x.st", "x1337x.ws", "1337xx.to"];
-let workingHostIndex = 0;
 
 const MAX_DETAILS = 6;
 const STOP = new Set(["the", "a", "an", "of", "and", "or", "to", "for", "in"]);
@@ -130,28 +129,18 @@ async function search(
         ? "/popular-tv"
         : "/music/";
 
-  let base = "";
-  let html = "";
-  let lastError: unknown;
-  for (let i = 0; i < HOSTS.length; i++) {
-    const hostIdx = (workingHostIndex + i) % HOSTS.length;
-    const host = HOSTS[hostIdx]!;
-    try {
-      const candidate = `https://${host}`;
-      html = await fetchText(`${candidate}${path}`, {
-        signal: ctx.signal,
-        timeoutMs: ctx.timeoutMs,
-        retries: i === 0 ? 2 : 0,
-      });
-      base = candidate;
-      workingHostIndex = hostIdx;
-      break;
-    } catch (e) {
-      if (ctx.signal.aborted) throw e;
-      lastError = e;
-    }
-  }
-  if (!base) throw lastError instanceof Error ? lastError : new HttpError(0, "1337x unreachable");
+  // All mirrors are raced concurrently: a hanging or blocked domain can no
+  // longer consume the source's whole timeout budget before a fallback is
+  // ever contacted. Detail-page links resolve against the winning origin.
+  const { url: winningUrl, body: html } = await fetchFromFirstMirror(
+    HOSTS.map((host) => `https://${host}${path}`),
+    {
+      signal: ctx.signal,
+      timeoutMs: Math.min(ctx.timeoutMs, 10_000),
+      retries: 0,
+    },
+  );
+  const base = new URL(winningUrl).origin;
 
   const all = parseRows(html);
   // The listing answered but we cannot read it. Fail loudly instead of silently

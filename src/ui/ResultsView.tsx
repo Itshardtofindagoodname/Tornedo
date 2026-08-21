@@ -1,5 +1,5 @@
 /**
- * Results view: query summary, live source status strip, and a scrollable
+ * Results view: query summary and a scrollable
  * release list with strong typographic hierarchy. Each result spans two lines:
  * the title (focus state via accent marker + bold) and a muted metadata line.
  * Presentational — App owns all input.
@@ -7,14 +7,13 @@
 import { useMemo, useRef } from "react";
 import { Box, Text, useBoxMetrics, type DOMElement } from "ink";
 import type { Application } from "../app/application.js";
-import type { SearchSession, SourceReport, SourceHealth } from "../app/search-service.js";
+import type { SearchSession } from "../app/search-service.js";
 import type { MediaCategory, Release } from "../model/search.js";
-import type { SourceErrorKind } from "../model/source.js";
 import type { ReleaseFilter, SortSpec } from "../results/filter.js";
 import { formatAudio } from "../media/audio.js";
 import { describeFilter, sortLabel, sortReleases } from "../results/filter.js";
 import { formatBytes } from "../utils/bytes.js";
-import { categoryColor, categoryTag, sourceGlyph, sourceHealthColor } from "./format.js";
+import { categoryColor, categoryTag } from "./format.js";
 import { Spinner, EmptyState } from "./components.js";
 import { palette } from "./theme.js";
 import { scrollWindow } from "./text.js";
@@ -96,7 +95,6 @@ export function ResultsView({
 
   const summary = session?.summary();
   const done = session?.isDone();
-  const reports = session?.sourceReports();
 
   const inferred = session?.inference();
   const filterChips = describeFilter(releaseFilter);
@@ -154,9 +152,6 @@ export function ResultsView({
         </Box>
       ) : null}
 
-      <SourceStrip app={app} reports={reports} />
-      {reports && reports.size > 0 ? <Box height={1} /> : null}
-
       <Box ref={listRef} flexGrow={1} flexDirection="column" overflow="hidden">
         {len === 0 ? (
           done ? (
@@ -195,57 +190,6 @@ function describeInference(inferred: NonNullable<ReturnType<SearchSession["infer
 }
 
 // --- pieces ----------------------------------------------------------------
-
-function healthOf(r: SourceReport): SourceHealth {
-  return r.health ?? (r.status === "ok" ? (r.results > 0 ? "healthy" : "working") : "failed");
-}
-
-const FAILURE_LABEL: Record<SourceErrorKind, string> = {
-  timeout: "timeout",
-  http: "HTTP failure",
-  parse: "parser failure",
-  unavailable: "network failure",
-  cancelled: "aborted",
-  unsupported: "unsupported",
-};
-
-function SourceStrip({
-  app,
-  reports,
-}: {
-  app: Application;
-  reports?: Map<string, SourceReport>;
-}): React.ReactNode {
-  const sourceNames = useMemo(
-    () => new Map(app.sources.map((s) => [s.id, s.name])),
-    [app],
-  );
-  if (!reports || reports.size === 0) return null;
-  const entries = [...reports.entries()];
-  return (
-    <Box height={1} paddingLeft={1} gap={2}>
-      {entries.map(([id, r]) => {
-        const name = sourceNames.get(id) ?? id;
-        const health = healthOf(r);
-        const glyph = sourceGlyph(health);
-        const color = sourceHealthColor(health);
-        const text =
-          r.status === "ok"
-            ? r.results > 0
-              ? `${glyph} ${name} ${r.results}`
-              : `${glyph} ${name} 0`
-            : r.status === "pending"
-              ? `${glyph} ${name} …`
-              : `${glyph} ${name} ${r.failure ? FAILURE_LABEL[r.failure.kind] : "error"}`;
-        return (
-          <Text key={id} color={color} wrap="truncate">
-            {text}
-          </Text>
-        );
-      })}
-    </Box>
-  );
-}
 
 function ResultRow({
   release,

@@ -4,10 +4,10 @@
  */
 import type { MediaCategory, SearchResult } from "../model/search.js";
 import type { SearchContext, SourceAdapter } from "../model/source.js";
-import { fetchJson } from "./net.js";
+import { fetchJsonFromFirstMirror } from "./net.js";
 import { buildMagnet, normalizeInfoHash } from "../torrent/parse.js";
 
-const HOSTS = ["yts.mx", "yts.am", "yts.rs"];
+const HOSTS = ["yts.mx", "yts.lt", "yts.bz", "yts.am", "yts.rs"];
 
 const CATEGORY: MediaCategory = "Movie";
 
@@ -37,44 +37,40 @@ export async function search(query: string, ctx: SearchContext): Promise<SearchR
   if (q) params.set("query_term", q);
   else params.set("sort_by", "date_added");
 
+  // All mirrors are raced concurrently: a hanging domain can no longer consume
+  // the source's whole timeout budget before a fallback is ever contacted.
+  const json = await fetchJsonFromFirstMirror<YtsResponse>(
+    HOSTS.map((host) => `https://${host}/api/v2/list_movies.json?${params.toString()}`),
+    {
+      signal: ctx.signal,
+      timeoutMs: Math.min(ctx.timeoutMs, 8_000),
+      retries: 0,
+    },
+  );
+
   const out: SearchResult[] = [];
-  let lastError: unknown = null;
-  for (const host of HOSTS) {
-    if (ctx.signal.aborted) return [];
-    try {
-      const json = await fetchJson<YtsResponse>(`https://${host}/api/v2/list_movies.json?${params.toString()}`, {
-        signal: ctx.signal,
-        timeoutMs: ctx.timeoutMs,
-        retries: 1,
+  for (const movie of json.data?.movies ?? []) {
+    const base = movie.title_long || movie.title || "Unknown";
+    for (const t of movie.torrents ?? []) {
+      const hash = t.hash ?? "";
+      const infoHash = normalizeInfoHash(hash);
+      if (!infoHash) continue;
+      const tag = [t.quality, t.type].filter(Boolean).join(" ");
+      const title = tag ? `${base} [${tag}]` : base;
+      out.push({
+        infohash: infoHash,
+        title,
+        size: t.size_bytes,
+        seeders: t.seeds,
+        leechers: t.peers,
+        sourceId: "yts",
+        category: CATEGORY,
+        magnet: buildMagnet(infoHash, title),
+        added: movie.date_uploaded_unix,
       });
-      for (const movie of json.data?.movies ?? []) {
-        const base = movie.title_long || movie.title || "Unknown";
-        for (const t of movie.torrents ?? []) {
-          const hash = t.hash ?? "";
-          const infoHash = normalizeInfoHash(hash);
-          if (!infoHash) continue;
-          const tag = [t.quality, t.type].filter(Boolean).join(" ");
-          const title = tag ? `${base} [${tag}]` : base;
-          out.push({
-            infohash: infoHash,
-            title,
-            size: t.size_bytes,
-            seeders: t.seeds,
-            leechers: t.peers,
-            sourceId: "yts",
-            category: CATEGORY,
-            magnet: buildMagnet(infoHash, title),
-            added: movie.date_uploaded_unix,
-          });
-        }
-      }
-      return out;
-    } catch (e) {
-      if (ctx.signal.aborted) throw e;
-      lastError = e;
     }
   }
-  throw lastError instanceof Error ? lastError : new Error("YTS unreachable");
+  return out;
 }
 
 export const yts: SourceAdapter = {

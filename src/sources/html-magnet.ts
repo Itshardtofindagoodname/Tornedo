@@ -4,18 +4,28 @@
  * canonical infohash) has been verified.
  */
 import type { MediaCategory, SearchResult } from "../model/search.js";
-import type { SearchContext, SourceAdapter } from "../model/source.js";
+import type { SearchContext, SourceAdapter, SourceGroup } from "../model/source.js";
 import { normalizeInfoHash } from "../torrent/parse.js";
-import { fetchText, HttpError, ParseError } from "./net.js";
+import { fetchFromFirstMirror, fetchText, HttpError, ParseError } from "./net.js";
 import { unescapeEntities } from "./rss.js";
 
 export interface HtmlMagnetSite {
   id: string;
   name: string;
   homepage: string;
-  searchUrl(query: string): string;
+  /** Single-mirror search URL. Either this or `searchUrls` must be provided. */
+  searchUrl?(query: string): string;
+  /**
+   * Mirror-aware search URLs. All are raced concurrently and the first mirror
+   * to answer wins, so a blocked or hanging domain cannot stall the source.
+   */
+  searchUrls?(query: string): string[];
   /** Restricts result links to the site's torrent-detail route. */
   detailPath: RegExp;
+  /** Categories this source returns. Defaults to ["Music"]. */
+  categories?: readonly MediaCategory[];
+  /** Source groups. Defaults to ["Music"]. */
+  groups?: readonly SourceGroup[];
 }
 
 interface Candidate { title: string; path: string }
@@ -52,7 +62,7 @@ export function magnetFromHtml(html: string): string | null {
  * without the second detail-page fetch — one fewer round trip and one fewer
  * fragile hop between the site and a usable result.
  */
-export function parseDirectMagnets(html: string, siteId: string): SearchResult[] {
+export function parseDirectMagnets(html: string, siteId: string, category: MediaCategory = "Music" as MediaCategory): SearchResult[] {
   const seen = new Set<string>();
   const out: SearchResult[] = [];
   for (const match of html.matchAll(/<a\b[^>]*href\s*=\s*["'](magnet:\?xt=urn:btih:[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
@@ -62,18 +72,21 @@ export function parseDirectMagnets(html: string, siteId: string): SearchResult[]
     const title = unescapeEntities(match[2]!.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
     if (!title) continue;
     seen.add(infohash);
-    out.push({ infohash, title, magnet, sourceId: siteId, category: "Music" as MediaCategory });
+    out.push({ infohash, title, magnet, sourceId: siteId, category });
     if (out.length === 6) break;
   }
   return out;
 }
 
 export function htmlMagnetMusicSource(site: HtmlMagnetSite): SourceAdapter {
+  const categories = site.categories ?? (["Music"] as readonly MediaCategory[]);
+  const groups = site.groups ?? (["Music"] as readonly SourceGroup[]);
+  const primaryCategory = categories[0] ?? "Music";
   return {
     id: site.id,
     name: site.name,
-    groups: ["Music"],
-    categories: ["Music"],
+    groups,
+    categories,
     homepage: site.homepage,
     timeoutMs: 15_000,
     concurrency: 3,
@@ -81,12 +94,22 @@ export function htmlMagnetMusicSource(site: HtmlMagnetSite): SourceAdapter {
     async search(query: string, ctx: SearchContext): Promise<SearchResult[]> {
       const q = query.trim();
       if (!q) return [];
-      const listing = await fetchText(site.searchUrl(q), { signal: ctx.signal, timeoutMs: ctx.timeoutMs, retries: 1 });
+      const urls = site.searchUrls ? site.searchUrls(q) : [site.searchUrl!(q)];
+      const fetchOpts = { signal: ctx.signal, timeoutMs: ctx.timeoutMs, retries: 1 };
+      let winningUrl: string;
+      let listing: string;
+      if (urls.length === 1) {
+        winningUrl = urls[0]!;
+        listing = await fetchText(winningUrl, fetchOpts);
+      } else {
+        ({ url: winningUrl, body: listing } = await fetchFromFirstMirror(urls, fetchOpts));
+      }
+      const detailBase = new URL(winningUrl).origin;
 
       // Fast path: the listing already exposes magnet URIs, so no detail-page
       // round trips are needed. This is the common case for these indexers and
       // the most robust one (nothing else can change under us but the magnet).
-      const direct = parseDirectMagnets(listing, site.id);
+      const direct = parseDirectMagnets(listing, site.id, primaryCategory);
       if (direct.length > 0) return direct;
 
       const candidates = parseDetailCandidates(listing, site.detailPath);
@@ -108,7 +131,7 @@ export function htmlMagnetMusicSource(site: HtmlMagnetSite): SourceAdapter {
       const fetches = await Promise.all(
         candidates.map(async ({ title, path }): Promise<FetchOutcome> => {
           try {
-            const detail = await fetchText(absoluteUrl(site.homepage, path), {
+            const detail = await fetchText(absoluteUrl(detailBase, path), {
               signal: ctx.signal,
               timeoutMs: ctx.timeoutMs,
               retries: 0,
@@ -116,7 +139,7 @@ export function htmlMagnetMusicSource(site: HtmlMagnetSite): SourceAdapter {
             const magnet = magnetFromHtml(detail);
             const infohash = normalizeInfoHash(magnet?.match(/urn:btih:([a-zA-Z0-9]+)/i)?.[1] ?? "");
             if (magnet && infohash) {
-              return { ok: true, result: { infohash, title, magnet, sourceId: site.id, category: "Music" as MediaCategory } };
+              return { ok: true, result: { infohash, title, magnet, sourceId: site.id, category: primaryCategory } };
             }
             return { ok: false, kind: "parse" };
           } catch {
