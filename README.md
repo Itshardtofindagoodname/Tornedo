@@ -1,56 +1,89 @@
-# tornedo
+<div align="center">
+
+# ⚡ tornedo
+
+**Local-first · Terminal-native · Federated torrent search & download**
 
 [![CI](https://github.com/Itshardtofindagoodname/Tornedo/actions/workflows/ci.yml/badge.svg)](https://github.com/Itshardtofindagoodname/Tornedo/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/tornedo?color=cb3837&logo=npm)](https://www.npmjs.com/package/tornedo)
+[![Node](https://img.shields.io/badge/node-%3E%3D%2022-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](https://github.com/Itshardtofindagoodname/Tornedo/pulls)
 
-Local-first, terminal-native, federated torrent **search** and **download** client.
+Search many torrent sites **at once**, get one clean, ranked, de-duplicated
+result set, and download with a fast native engine — all without an account,
+a cloud, or any telemetry. State lives in a local SQLite database and
+survives restarts.
 
-Search many torrent sites at once, get one clean, ranked, de-duplicated result
-set, and download with a fast native engine — all without an account, a cloud,
-or any telemetry. State lives in a local SQLite database and survives restarts.
+<br>
 
-```
+<img src="public/search.png" alt="tornedo terminal UI — home screen" width="100%">
+
+<br>
+
+```sh
 tornedo search "dune"          # one federated search, every source
 tornedo search "cyberpunk" --json | jq .results
 tornedo magnet "magnet:?xt=urn:btih:..."
 tornedo                        # terminal UI
 ```
 
-## Highlights
+</div>
 
-- **Federated search** — every enabled source runs concurrently with its own
+---
+
+## 📸 See it in action
+
+| 🔍 Federated results | 🚀 Live downloads |
+| :---: | :---: |
+| <img src="public/results.png" alt="search results" width="100%"> | <img src="public/downloading.png" alt="downloads view" width="100%"> |
+| *One query → every source → merged & ranked* | *Progress, speeds, peers and ETA at a glance* |
+
+| 🗂️ File-level control | |
+| :---: | :---: |
+| <img src="public/files.png" alt="details inspector with file selection" width="100%"> | |
+| *Pick exactly the files you want before downloading* | |
+
+---
+
+## ✨ Highlights
+
+- 🔎 **Federated search** — every enabled source runs concurrently with its own
   timeout and fault isolation; a slow or dead source never blocks the others.
   Results stream in as each source settles. Transient failures (timeouts,
   outages, 5xx) are retried once with a short backoff; parse failures never are.
-- **Smart results** — titles are parsed into structured metadata (quality,
+- 🧠 **Smart results** — titles are parsed into structured metadata (quality,
   codec, audio, HDR, editions, languages, season/episode ranges, game platform
   and version…), identical torrents from different sites are merged, everything
   is deterministically ranked, and releases group by title/year/season with each
   quality as a variant.
-- **Intelligent search** — every query is analyzed (media type, title,
+- 🪄 **Intelligent search** — every query is analyzed (media type, title,
   artist/album, year, quality, season/episode) without ever over-asserting: a
   confident parse boosts matching releases and prefers the sources that carry
   that media type; an ambiguous query degrades to a plain search.
-- **Fast downloads** — WebTorrent engine behind a thin abstraction, persistent
+- ⬇️ **Fast downloads** — WebTorrent engine behind a thin abstraction, persistent
   queue, resume support, per-torrent and global speed limits, seeding.
-- **Crash recovery** — a run marker in the SQLite database tells startup whether
+- 💥 **Crash recovery** — a run marker in the SQLite database tells startup whether
   the previous run ended cleanly. If it crashed, interrupted downloads are
   reconciled (progress preserved, pieces re-verified) and the UI shows exactly
   what was resumed, completed and failed.
-- **Terminal UI** — an elegant, component-driven TUI built on **Ink + React**:
+- 🖥️ **Terminal UI** — an elegant, component-driven TUI built on **Ink + React**:
   search, results with category/sort/filter controls, live source status,
   details, downloads with a full action menu, and help. Every keybinding is
   configurable and shown on-screen.
-- **Headless** — everything the UI can do is available as commands with
+- 🤖 **Headless** — everything the UI can do is available as commands with
   `--json` output.
-- **Self-diagnostics** — `tornedo doctor` inspects the config, database,
+- 🩺 **Self-diagnostics** — `tornedo doctor` inspects the config, database,
   download directory, disk space, engine, network, DHT, trackers and sources,
   and reports each check with an actionable fix.
-- **Watch mode** — drop `.torrent` or `.magnet`/magnet-URI files into a folder
+- 👀 **Watch mode** — drop `.torrent` or `.magnet`/magnet-URI files into a folder
   and they are added automatically.
-- **Private by design** — no accounts, no tracking, no analytics. Config and
+- 🔒 **Private by design** — no accounts, no tracking, no analytics. Config and
   database live on your machine.
 
-## Install
+---
+
+## 📦 Install
 
 Requires Node.js >= 22.
 
@@ -68,6 +101,7 @@ tornedo --help        # usage
 tornedo search "dune" # one federated search, every source
 ```
 
+> [!NOTE]
 > **npm 11.16+ / npm 12 (`allowScripts`).** Recent npm releases require install
 > scripts (native addon builds, etc.) to be explicitly approved. `tornedo` ships
 > **no install scripts of its own**, but it depends on third-party native
@@ -82,7 +116,7 @@ tornedo search "dune" # one federated search, every source
 > or persist the allowlist with `npm install-scripts approve <pkg>` inside a
 > project. Everything runs on TCP even if the optional addons are skipped.
 
-### Build from source (developers)
+### 🛠️ Build from source (developers)
 
 ```sh
 git clone https://github.com/Itshardtofindagoodname/Tornedo.git
@@ -100,7 +134,9 @@ npm pack
 npm install -g ./tornedo-1.1.0.tgz
 ```
 
-## Commands
+---
+
+## ⌨️ Commands
 
 ```
 tornedo search <query>     Search every enabled source (streams results)
@@ -130,10 +166,12 @@ Common flags: `--json` (machine-readable output on stdout only), `--source <id>`
 (repeatable / comma-separated), `--seed` / `--no-seed`, `--no-wait`, `-y/--yes`,
 `-q/--quiet`. See `tornedo help`.
 
-## Terminal UI
+---
+
+## 🖥️ Terminal UI
 
 | Key | Action |
-| --- | --- |
+| :--- | :--- |
 | `↑/k` `↓/j` | navigate |
 | `enter` | download — in the details inspector it commits the checked files |
 | `d` | toggle the highlighted file for download (details file panel) |
@@ -155,7 +193,9 @@ Common flags: `--json` (machine-readable output on stdout only), `--source <id>`
 
 Keybindings are configurable under `keybindings` in the config file.
 
-## Sources
+---
+
+## 🌐 Sources
 
 Enable/disable any source (`tornedo sources`, then
 `tornedo config set sources.<id> true|false`). Built-in adapters: **FitGirl
@@ -167,12 +207,12 @@ health (seeders) are ranked preferentially.
 
 User-configured providers are first-class sources:
 
-- **Torznab/Newznab** — point at any local indexer (Prowlarr, Jackett, nZEDb,
+- 🧩 **Torznab/Newznab** — point at any local indexer (Prowlarr, Jackett, nZEDb,
   …). Tornedo discovers what the endpoint supports (`?t=caps`) and never
   guesses; an endpoint without a `music` capability reports
   `unsupported` instead of returning empty results. Configure under
   `torznabProviders` and verify with `tornedo sources --check`.
-- **Internet Archive** — public audio items via the archive.org JSON APIs.
+- 📼 **Internet Archive** — public audio items via the archive.org JSON APIs.
   Only items with downloadable audio files are surfaced. Not a torrent swarm;
   the UI explains why an `ia://` item cannot be queued into the torrent engine.
   Configure under `internetArchive` (disabled by default).
@@ -181,7 +221,9 @@ For music searches the robust providers above are the recommended path — the
 HTML indexers above are fast-path fallbacks and fail loudly (never silently
 empty) when their page structure changes.
 
-## Configuration
+---
+
+## ⚙️ Configuration
 
 `tornedo config` prints the effective config as JSON. Files live at:
 
@@ -191,7 +233,7 @@ empty) when their page structure changes.
 Set `TORNEDO_STATE_DIR` to relocate both (also used by the test suite).
 
 | Key | Meaning |
-| --- | --- |
+| :--- | :--- |
 | `downloadDir` | where completed data lands |
 | `maxActiveDownloads` | concurrent active downloads (`0` = unlimited) |
 | `maxDownloadSpeed` / `maxUploadSpeed` | global limits in B/s (`0` = unlimited) |
@@ -206,7 +248,7 @@ Set `TORNEDO_STATE_DIR` to relocate both (also used by the test suite).
 | `torznabProviders[]` | user-configured Torznab/Newznab endpoints (see below) |
 | `internetArchive` | Internet Archive provider settings (below) |
 
-### Torznab providers
+### 🧩 Torznab providers
 
 `torznabProviders` is an array of objects; each entry adds one source:
 
@@ -228,7 +270,7 @@ Set `TORNEDO_STATE_DIR` to relocate both (also used by the test suite).
 ```
 
 | Field | Meaning |
-| --- | --- |
+| :--- | :--- |
 | `id` | stable id (defaults to `torznab:<index>`) |
 | `name` | label shown in source lists |
 | `baseUrl` | base URL of the Torznab API (required) |
@@ -241,14 +283,14 @@ Set `TORNEDO_STATE_DIR` to relocate both (also used by the test suite).
 `tornedo sources --check` fetches each endpoint's `?t=caps` and reports which
 query modes (`search` / `music` / `movie` / `tv`) it really supports.
 
-### Internet Archive
+### 📼 Internet Archive
 
 ```json
 { "internetArchive": { "enabled": false, "timeoutMs": 15000, "maxResults": 30 } }
 ```
 
 | Field | Meaning |
-| --- | --- |
+| :--- | :--- |
 | `enabled` | participate in searches |
 | `timeoutMs` | per-request timeout |
 | `maxResults` | max items returned per search |
@@ -257,7 +299,9 @@ Enable it with `tornedo config set internetArchive.enabled true`. Nested keys
 are settable as dotted paths; add/remove Torznab entries by editing
 `config.json` (arrays cannot be appended from the CLI).
 
-## Development
+---
+
+## 🧑‍💻 Development
 
 ```sh
 npm run typecheck    # strict TypeScript, no emit
@@ -270,7 +314,9 @@ The test suite never touches your real config or database (`TORNEDO_STATE_DIR`
 points at a temp directory). The search engine, download manager, and CLI are
 covered end-to-end with fake sources and a fake torrent client.
 
-## Architecture
+---
+
+## 🏗️ Architecture
 
 ```
 src/
@@ -290,6 +336,16 @@ src/
   ui/          Ink/React terminal UI (views, components, key handling)
 ```
 
-## License
+---
+
+<div align="center">
+
+## 📄 License
 
 MIT. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+<br>
+
+**⚡ tornedo** — *search everything, download anywhere, own your data.*
+
+</div>
