@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.1.0] - 2026-08-25
+
+### Fixes
+
+- **Fixed the reported CLI version lagging behind the package version.**
+  `tornedo --version` / `tornedo version` still printed `3.2.0` even after the
+  package had moved to 4.0.0, because the version string was hardcoded in the
+  source and drifted whenever the manifest was bumped. The CLI now reads its
+  version directly from `package.json` at runtime, so the reported version is
+  always exactly the installed package's version — no manual re-syncing ever
+  again.
+
+### Chores
+
+- Bumped the published version to 4.1.0.
+
+## [4.0.0] - 2026-08-25
+
+### Documentation & presentation
+
+- Refreshed the README with a screenshot tour of the app (search, results,
+  downloads, file selection), an expanded highlights section, and updated
+  command/keybinding tables.
+- Documented the full source lineup (FitGirl Repacks, YTS, The Pirate Bay,
+  1337x, LimeTorrents, TorrentGalaxy, TorrentDownloads, EZTV, Nyaa, SubsPlease,
+  BitTorrented) alongside the user-configurable Torznab/Newznab and Internet
+  Archive providers.
+- Bumped the published version to 4.0.0.
+
+> [!NOTE]
+> The 4.0.0 release shipped with a stale hardcoded version constant, so
+> `tornedo --version` kept reporting 3.2.0 on machines that installed it.
+> Fixed in 4.1.0.
+
 ## [3.2.0] - 2026-08-20
 
 ### File selection, clarified keys
@@ -113,4 +147,9 @@ All notable changes to this project are documented in this file.
   version.
 - Added this changelog.
 
+[4.1.0]: https://github.com/Itshardtofindagoodname/Tornedo/releases/tag/v4.1.0
+[4.0.0]: https://github.com/Itshardtofindagoodname/Tornedo/releases/tag/v4.0.0
+[3.2.0]: https://github.com/Itshardtofindagoodname/Tornedo/releases/tag/v3.2.0
+[3.0.0]: https://github.com/Itshardtofindagoodname/Tornedo/releases/tag/v3.0.0
+[2.1.0]: https://github.com/Itshardtofindagoodname/Tornedo/releases/tag/v2.1.0
 [1.1.0]: https://github.com/Itshardtofindagoodname/Tornedo/releases/tag/v1.1.0

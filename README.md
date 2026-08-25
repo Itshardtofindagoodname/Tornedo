@@ -131,7 +131,7 @@ publishing, pack and install it:
 
 ```sh
 npm pack
-npm install -g ./tornedo-1.1.0.tgz
+npm install -g ./tornedo-4.1.0.tgz
 ```
 
 ---
