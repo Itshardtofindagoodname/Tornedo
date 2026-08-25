@@ -115,6 +115,41 @@ tornedo search "dune" # one federated search, every source
 >
 > or persist the allowlist with `npm install-scripts approve <pkg>` inside a
 > project. Everything runs on TCP even if the optional addons are skipped.
+>
+> Note that this `allowScripts` mechanism only concerns the **warning** above.
+> It does not fix the unrelated global-install failure described below — that
+> one fails with exit code 254 before any scripts matter.
+
+> [!WARNING]
+> **npm global installs may fail with exit code 254 (`ip-set` / npx ENOENT).**
+> A transitive dependency (`webtorrent` → `load-ip-set` → `ip-set@3.0.0`) ships
+> a `preinstall: npx only-allow pnpm` script in its published tarball. On some
+> npm versions this nested `npx` crashes during **global** installs when its
+> cache entry doesn't exist yet, aborting the whole install with an error like:
+>
+> ```
+> npm error code 254
+> npm error path .../node_modules/ip-set
+> npm error command sh -c npx only-allow pnpm
+> npm error npm error code ENOENT ... Could not read package.json
+> ```
+>
+> This is tracked upstream at [fisch0920/ip-set#15](https://github.com/fisch0920/ip-set/issues/15)
+> and only affects `npm install -g` — local installs and installs where the npx
+> cache is already warm succeed fine. Until upstream republishes, pre-warm the
+> cache once before installing (the red "Use pnpm" box it prints is expected —
+> ignore it):
+>
+> ```sh
+> npx --yes only-allow pnpm     # exits 1 with a "Use pnpm" box — expected, ignore it
+> npm install -g tornedo
+> ```
+>
+> Alternatively, install with pnpm, which satisfies the guard outright:
+>
+> ```sh
+> pnpm add -g tornedo
+> ```
 
 ### 🛠️ Build from source (developers)
 
