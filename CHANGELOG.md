@@ -253,6 +253,7 @@ All notable changes to this project are documented in this file.
   version.
 - Added this changelog.
 
+[5.0.0]: https://github.com/Itshardtofindagoodname/Tornedo/releases/tag/v5.0.0
 [4.1.0]: https://github.com/Itshardtofindagoodname/Tornedo/releases/tag/v4.1.0
 [4.0.0]: https://github.com/Itshardtofindagoodname/Tornedo/releases/tag/v4.0.0
 [3.2.0]: https://github.com/Itshardtofindagoodname/Tornedo/releases/tag/v3.2.0

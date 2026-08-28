@@ -32,6 +32,37 @@ tornedo                        # terminal UI
 
 ---
 
+## 🎬 What's new in v5.0.0
+
+The headline: **Watch online** — a whole new streaming mode that lets you search
+and play movies, TV and live TV straight from the terminal, no downloads
+required. Everything ships enabled out of the box.
+
+- 🎥 **Streaming mode** — `tab` on the home screen flips the search into Watch
+  mode. One query searches **MovieBox**, **4KHDHub**, your installed **Stremio
+  addons** (Cinemeta + Anime Kitsu ship by default) and Tornedo's own
+  **torrent engine**, and returns streamable titles instead of raw torrents.
+  `enter` plays the selected stream in **mpv / VLC / IINA**.
+- 📺 **Live TV** — add any m3u8 playlist (`tornedo tv add <url>`) and matching
+  channels appear in Watch searches with a `live tv` tag, playing straight from
+  their stream URL.
+- ⬇️ **Download from Watch** — `d` downloads any stream with Range resume via
+  `.part` files; `s` picks subtitles, `o` opens with a chosen player, `R`
+  switches resolution, `*` toggles favorites.
+- 🔁 **Continue watching** — a tiny mpv Lua script records position on exit so
+  playback resumes exactly where you left off.
+- 🧩 **`tornedo addons`** — a first-class command group to manage Stremio
+  addons (`list` / `add` / `remove` / `clear`).
+- 🎨 **Themes** — 9 new palettes (mocha, latte, macchiato, frappe, nord,
+  tokyonight, dracula, gruvbox, rosepine), applied live from Settings.
+- ⚙️ **New config keys** — `searchAction`, `streamingEnabled`, `bdixEnabled`,
+  `defaultPlayer`, `streamDownloadDir`, `theme`.
+
+See the [Changelog](CHANGELOG.md) for the full breakdown, and the **Watch mode
+(streaming)** section below for every keybinding.
+
+---
+
 ## 📸 See it in action
 
 | 🔍 Federated results | 🚀 Live downloads |
@@ -171,7 +202,7 @@ publishing, pack and install it:
 
 ```sh
 npm pack
-npm install -g ./tornedo-4.1.0.tgz
+npm install -g ./tornedo-5.0.0.tgz
 ```
 
 ---
