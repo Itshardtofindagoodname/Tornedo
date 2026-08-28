@@ -216,6 +216,23 @@ export class SearchService {
   createSession(query: string, sourceIds?: string[], category?: MediaCategory): SearchSession {
     return new SearchSession(this.opts, query, sourceIds, category);
   }
+
+  /**
+   * One-shot search: returns whatever releases settled within an optional
+   * window (default ~7s) rather than waiting for every source to finish. Used
+   * by Watch mode to surface torrent results without stalling on stragglers.
+   */
+  async searchOnce(query: string, category?: MediaCategory, maxWaitMs = 7_000): Promise<Release[]> {
+    const session = this.createSession(query, undefined, category);
+    session.start();
+    const timer = setTimeout(() => session.cancel(), maxWaitMs);
+    try {
+      await session.waitForDone();
+    } finally {
+      clearTimeout(timer);
+    }
+    return session.releases();
+  }
 }
 
 function okReport(results: number): SourceReport {

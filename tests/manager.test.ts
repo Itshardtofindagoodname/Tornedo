@@ -447,9 +447,11 @@ get: () => null,
       writeFileSync(join(dest, "Game", "MDS", "readme.txt"), "x");
 
       client.fireDone(HASH_A);
-      // The cleanup runs fire-and-forget; wait for the placeholder to vanish.
+      // The cleanup runs fire-and-forget; wait for every placeholder to vanish
+      // (declining one file first doesn't mean the others' unlinks have run).
       const deadline = Date.now() + 2_000;
-      while (existsSync(join(dest, "Game", "f01.mkv")) && Date.now() < deadline) {
+      const gone = (p: string) => !existsSync(join(dest, "Game", p));
+      while (!(gone("f01.mkv") && gone("f02.mkv") && gone("MDS")) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
 

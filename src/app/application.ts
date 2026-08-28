@@ -5,6 +5,12 @@
  */
 import type { TornedoConfig } from "../config/config.js";
 import { defaultConfig, ensureConfigMigrated, loadConfig, saveConfig } from "../config/config.js";
+import {
+  addonsFile,
+  favoritesFile,
+  streamHistoryFile,
+  tvFile,
+} from "../config/paths.js";
 import { openDatabase, openInMemoryHandle, type DatabaseHandle } from "../database/db.js";
 import { TorrentStore } from "../database/store.js";
 import { TorrentManager } from "../downloads/manager.js";
@@ -16,6 +22,17 @@ import type { TorrentClient } from "../torrent/client.js";
 import { LazyTorrentClient } from "../torrent/lazy.js";
 import { PUBLIC_TRACKERS } from "../torrent/parse.js";
 import { SearchService } from "./search-service.js";
+import type { InstalledAddon } from "../stream/addons.js";
+import { StreamService } from "../stream/service.js";
+import type { PlaybackSource, StreamCatalogItem, StreamMirror, StreamRelease } from "../stream/models.js";
+import { adaptTorrentRelease } from "../stream/torrent-adapter.js";
+import { TorrentStreamer } from "../stream/torrent-stream.js";
+import { FavoritesManager } from "../stream/favorites.js";
+import { HistoryManager } from "../stream/history.js";
+import { JsonStore } from "../stream/store.js";
+import type { TvPlaylist } from "../stream/tv.js";
+import { streamDataDir } from "../config/paths.js";
+import path from "node:path";
 
 /** How many recent search queries are remembered (persisted across runs). */
 export const MAX_RECENT_SEARCHES = 8;
@@ -41,6 +58,11 @@ export class Application {
   readonly db: DatabaseHandle;
   readonly store: TorrentStore;
   readonly manager: TorrentManager;
+  readonly streams: StreamService;
+  readonly favorites: FavoritesManager;
+  readonly history: HistoryManager;
+  readonly addonsStore: JsonStore<InstalledAddon[]>;
+  readonly tvStore: JsonStore<TvPlaylist[]>;
   sources: readonly SourceAdapter[];
   healthSources: ReadonlySet<string>;
   searchEngine!: SearchEngine;
@@ -49,6 +71,7 @@ export class Application {
   private configState: TornedoConfig;
   private client: TorrentClient;
   private suspended = false;
+  private torrentStreamer: TorrentStreamer | null = null;
 
   private constructor(opts: ApplicationOptions) {
     this.db = opts.memoryDb ? openMemoryHandle() : openDatabase();
@@ -64,6 +87,16 @@ export class Application {
         return new WebTorrentClient({ announce: [...PUBLIC_TRACKERS] });
       });
     this.configState = defaultConfig();
+    this.streams = new StreamService({
+      cacheDir: streamDataDir(),
+      bdixEnabled: this.configState.bdixEnabled,
+      torrentSearch: (query) => this.torrentWatchSearch(query),
+      torrentStreamer: (release, mirror, signal) => this.torrentPlayback(release, mirror, signal),
+    });
+    this.favorites = new FavoritesManager(favoritesFile());
+    this.history = new HistoryManager(streamHistoryFile());
+    this.addonsStore = new JsonStore<InstalledAddon[]>(addonsFile());
+    this.tvStore = new JsonStore<TvPlaylist[]>(tvFile());
     this.sources = SOURCES;
     this.healthSources = new Set(SOURCES.filter((s) => s.reportsHealth).map((s) => s.id));
 
@@ -85,7 +118,17 @@ export class Application {
       app.rebuildSources();
       app.manager.applyConfig();
     }
+    app.streams.setBdixEnabled(app.configState.bdixEnabled);
+    await app.loadStreamData();
     return app;
+  }
+
+  /** Load the persisted addon list and live-TV playlists into the stream service. */
+  private async loadStreamData(): Promise<void> {
+    const addons = (await this.addonsStore.read()) ?? [];
+    this.streams.setAddons(addons);
+    const playlists = (await this.tvStore.read()) ?? [];
+    this.streams.setTvPlaylists(playlists);
   }
 
   /**
@@ -114,6 +157,33 @@ export class Application {
     return this.configState;
   }
 
+  /** Whether the streaming ("Watch") feature is usable right now. */
+  watchEnabled(): boolean {
+    return this.configState.streamingEnabled;
+  }
+
+  /** Effective folder for Watch-mode downloads. */
+  streamDownloadDir(): string {
+    return this.configState.streamDownloadDir ?? this.configState.downloadDir;
+  }
+
+  /** Save user-installed addons (persisted at the stream data dir). */
+  async setAddons(list: InstalledAddon[]): Promise<void> {
+    await this.addonsStore.write(list);
+    this.streams.setAddons(list);
+  }
+
+  /** Live-TV playlist sources currently configured for Watch mode. */
+  async streamTvPlaylists(): Promise<TvPlaylist[]> {
+    return (await this.tvStore.read()) ?? [];
+  }
+
+  /** Replace the live-TV playlist sources (persisted; used by the tv command). */
+  async setStreamTvPlaylists(list: TvPlaylist[]): Promise<void> {
+    await this.tvStore.write(list);
+    this.streams.setTvPlaylists(list);
+  }
+
   /** The torrent engine client (used by diagnostics/doctor). */
   getClient(): TorrentClient {
     return this.client;
@@ -134,6 +204,7 @@ export class Application {
     await this.persistConfig();
     this.rebuildSources();
     this.manager.applyConfig();
+    if (patch.bdixEnabled !== undefined) this.streams.setBdixEnabled(Boolean(patch.bdixEnabled));
   }
 
   private async persistConfig(): Promise<void> {
@@ -149,6 +220,68 @@ export class Application {
     this.configState = await loadConfig();
     this.rebuildSources();
     this.manager.applyConfig();
+    this.streams.setBdixEnabled(Boolean(this.configState.bdixEnabled));
+  }
+
+  // --- Watch-mode torrent sources ----------------------------------------------
+
+  /** Ranked torrent releases surfaced into Watch search, mapped to catalog items. */
+  private async torrentWatchSearch(query: string): Promise<StreamCatalogItem[]> {
+    const releases = await this.searchService.searchOnce(query);
+    // Pay the WebTorrent import/construction cost now (background), so that the
+    // first play of any torrent result doesn't spend its time loading the engine.
+    if (releases.length > 0) {
+      try {
+        this.getOrCreateStreamer().warmEngine();
+      } catch {
+        /* best effort */
+      }
+    }
+    return releases.slice(0, 60).map(adaptTorrentRelease);
+  }
+
+  private getOrCreateStreamer(): TorrentStreamer {
+    if (this.torrentStreamer === null) this.torrentStreamer = new TorrentStreamer();
+    return this.torrentStreamer;
+  }
+
+  /**
+   * Kick torrent metadata + engine preparation in the background so a later
+   * play of this release opens the player immediately. The streamer memoizes by
+   * magnet, so calling this repeatedly (e.g. while the user browses releases)
+   * is cheap and idempotent.
+   */
+  warmWatchStream(release: StreamRelease, mirror: StreamMirror): void {
+    if (!mirror.resolverUrl.startsWith("magnet:")) return;
+    try {
+      void this.getOrCreateStreamer().warm({
+        magnet: mirror.resolverUrl,
+        destination: path.join(streamDataDir(), "watch-stream"),
+        fileHint: release.filename,
+      });
+    } catch {
+      /* best effort */
+    }
+  }
+
+  /** Resolve a torrent release to a local HTTP stream (WebTorrent). */
+  private async torrentPlayback(
+    release: StreamRelease,
+    mirror: StreamMirror,
+    signal?: AbortSignal,
+  ): Promise<PlaybackSource> {
+    const url = await this.getOrCreateStreamer().serve({
+      magnet: mirror.resolverUrl,
+      destination: path.join(streamDataDir(), "watch-stream"),
+      fileHint: release.filename,
+      signal,
+    });
+    return {
+      provider: "torrent",
+      url: url.url,
+      headers: {},
+      sourceLabel: `${release.provider} · ${release.quality ?? "HD"}`,
+    };
   }
 
   // --- recent search history (persisted across sessions) ----------------------
@@ -195,6 +328,7 @@ export class Application {
   async suspend(): Promise<void> {
     if (this.suspended) return;
     this.suspended = true;
+    await this.torrentStreamer?.disposeAll();
     await this.manager.suspend();
     this.db.close();
   }

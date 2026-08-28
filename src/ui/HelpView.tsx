@@ -108,6 +108,26 @@ export function HelpView({ app }: { app: Application }): React.ReactNode {
         })}
       </Box>
 
+      <Box flexDirection="column" marginTop={1}>
+        <Text color={palette.faint}>watch mode (streaming)</Text>
+        <Box height={1}>
+          <Text color={palette.subtext}>
+            <Text color={palette.accent} bold>tab</Text>{" "}toggle watch ⇄ download on home ·{" "}
+            <Text color={palette.accent} bold>enter</Text>{" "}play ·{" "}
+            <Text color={palette.accent} bold>d</Text>{" "}download stream ·{" "}
+            <Text color={palette.accent} bold>s</Text>{" "}subtitles
+          </Text>
+        </Box>
+        <Box height={1}>
+          <Text color={palette.subtext}>
+            <Text color={palette.accent} bold>o</Text>{" "}open with player ·{" "}
+            <Text color={palette.accent} bold>R</Text>{" "}resolution ·{" "}
+            <Text color={palette.accent} bold>*</Text>{" "}favorite ·{" "}
+            <Text color={palette.accent} bold>tab</Text>{" "}episodes ⇄ streams
+          </Text>
+        </Box>
+      </Box>
+
       <Box flexGrow={1} />
 
       <Box justifyContent="center" paddingBottom={1}>

@@ -65,6 +65,16 @@ describe("parseArgs", () => {
     expect(parseArgs(["uninstall", "--clear"]).command).toBe("uninstall");
   });
 
+  it("parses the tv playlists command", () => {
+    const list = parseArgs(["tv"]);
+    expect(list.command).toBe("tv");
+    expect(list.positional).toEqual([]);
+    const add = parseArgs(["tv", "add", "https://iptv.example/pl.m3u8", "iptv"]);
+    expect(add.command).toBe("tv");
+    expect(add.positional).toEqual(["add", "https://iptv.example/pl.m3u8", "iptv"]);
+    expect(parseArgs(["tv", "clear"]).positional).toEqual(["clear"]);
+  });
+
   it("parses --clear without a command", () => {
     const args = parseArgs(["--clear"]);
     expect(args.command).toBeNull();

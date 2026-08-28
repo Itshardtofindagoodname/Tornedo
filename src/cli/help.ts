@@ -18,6 +18,16 @@ COMMANDS
   watch <dir>       Watch a directory for .torrent / magnet files
   history           Show recent search history
   history --clear   Clear recent search history
+  tv                List live-TV playlists (Watch mode)
+  tv add <url> [n]  Add a live-TV playlist (m3u8 url / file path)
+  tv remove <name>  Remove a live-TV playlist
+  tv search <q>     Search live-TV channels across configured playlists
+  tv test <url>     Probe a playlist and report channels / groups
+  tv clear          Remove all live-TV playlists
+  addons            List installed Stremio addons (Watch mode)
+  addons add <url>  Install a Stremio addon (validates its manifest first)
+  addons remove <n> Remove an installed addon
+  addons clear      Forget all installed addons (Cinemeta stays as default)
   config            Show configuration (JSON)
   sources           List search sources and their enabled state
   sources --check   Diagnose configured Torznab / Internet Archive providers
@@ -56,6 +66,11 @@ EXAMPLES
   tornedo files ./movie.torrent
   tornedo file ./movie.torrent --select "subs/en.srt,movie.mkv"
   tornedo watch ~/torrent-drop
+  tornedo tv test https://iptv.example/playlist.m3u8
+  tornedo tv add https://iptv.example/playlist.m3u8 iptv
+  tornedo tv search bbc
+  tornedo addons add https://peerflix.example/manifest.json
+  tornedo addons list
   tornedo doctor
   tornedo history --clear
   tornedo config set maxActiveDownloads 5

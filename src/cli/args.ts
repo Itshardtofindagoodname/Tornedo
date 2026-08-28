@@ -11,6 +11,8 @@ export const COMMANDS = [
   "file",
   "watch",
   "sources",
+  "tv",
+  "addons",
   "doctor",
   "files",
   "history",

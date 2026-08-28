@@ -5,6 +5,7 @@
  */
 import { Box, Text, useWindowSize } from "ink";
 import type { TorrentItem } from "../model/torrent.js";
+import type { DownloadAction } from "../config/config.js";
 import { SearchInput } from "./components.js";
 import { palette } from "./theme.js";
 import { downloadState, stateLabel } from "./state.js";
@@ -23,6 +24,9 @@ export interface SearchHomeProps {
   enabledSources: number;
   healthCounts: { healthy: number; degraded: number; unavailable: number };
   activeDownloads: number;
+  /** What enter does for a query: torrent search or streaming Watch. */
+  searchAction: DownloadAction;
+  streamingEnabled: boolean;
   compact?: boolean;
 }
 
@@ -36,6 +40,8 @@ export function SearchHome({
   enabledSources,
   healthCounts,
   activeDownloads,
+  searchAction,
+  streamingEnabled,
   compact,
 }: SearchHomeProps): React.ReactNode {
   const canBrowse = recentActive && recentSearches.length > 0;
@@ -86,8 +92,16 @@ export function SearchHome({
       <Box justifyContent="center" width="100%" marginTop={compact ? 2 : 4}>
         <Box flexDirection="column" width="62%">
           <SearchInput value={query} cursor={cursor} placeholder="search for torrents…" prompt="›" />
-          <Box marginTop={1}>
-            <Text color={palette.faint}>enter to search · search every enabled source at once</Text>
+          <Box marginTop={1} width="100%">
+            <Text color={palette.faint}>
+              {searchAction === "watch"
+                ? "enter to search movies · tv · anime · live tv"
+                : "enter to search · search every enabled source at once"}
+            </Text>
+            <Box flexGrow={1} />
+            {streamingEnabled ? (
+              <ModeToggle searchAction={searchAction} />
+            ) : null}
           </Box>
         </Box>
       </Box>
@@ -149,6 +163,26 @@ export function SearchHome({
           <Text color={activeDownloads > 0 ? palette.accent : palette.dim}>{activeDownloads} active downloads</Text>
         </Text>
       </Box>
+    </Box>
+  );
+}
+
+/** watch ⇄ download pill; toggled with tab on the home screen. */
+function ModeToggle({ searchAction }: { searchAction: DownloadAction }): React.ReactNode {
+  const watchActive = searchAction === "watch";
+  return (
+    <Box>
+      <Box backgroundColor={watchActive ? palette.accent : undefined} paddingX={1}>
+        <Text color={watchActive ? palette.bg : palette.dim} bold={watchActive}>
+          watch
+        </Text>
+      </Box>
+      <Box backgroundColor={!watchActive ? palette.accent : undefined} paddingX={1}>
+        <Text color={!watchActive ? palette.bg : palette.dim} bold={!watchActive}>
+          download
+        </Text>
+      </Box>
+      <Text color={palette.faint}> tab</Text>
     </Box>
   );
 }

@@ -5,6 +5,7 @@ import { APP_NAME, VERSION } from "../version.js";
 import type { CliContext } from "./context.js";
 import { USAGE } from "./help.js";
 import { runAdd } from "./commands/add.js";
+import { runAddons } from "./commands/addons.js";
 import { runClear, runUninstall } from "./commands/clear.js";
 import { runConfig } from "./commands/config.js";
 import { runDoctorCommand } from "./commands/doctor.js";
@@ -14,6 +15,7 @@ import { runHistory } from "./commands/history.js";
 import { runSearch } from "./commands/search.js";
 import { runSources } from "./commands/sources.js";
 import { runWatch } from "./commands/watch.js";
+import { runTv } from "./commands/tv.js";
 import { runTui } from "../ui/run.js";
 
 export async function dispatch(ctx: CliContext): Promise<number> {
@@ -36,6 +38,10 @@ export async function dispatch(ctx: CliContext): Promise<number> {
       return runAdd(ctx, cmd, positional[0] ?? "");
     case "watch":
       return runWatch(ctx, positional[0]);
+    case "tv":
+      return runTv(ctx, positional);
+    case "addons":
+      return runAddons(ctx, positional);
     case "sources":
       return runSources(ctx);
     case "doctor":

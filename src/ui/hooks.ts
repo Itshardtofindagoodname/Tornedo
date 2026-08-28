@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import type { Application } from "../app/application.js";
 import type { SearchSession } from "../app/search-service.js";
+import type { WatchSearchSession } from "../stream/session.js";
 
 /** Re-render the tree on an interval (live download speeds, spinner). */
 export function useRerenderInterval(ms: number): number {
@@ -22,6 +23,19 @@ export function useSearchSession(session: SearchSession | null): void {
   useEffect(() => {
     if (!session) return;
     return session.onChange(() => setTick((n) => n + 1));
+  }, [session]);
+}
+
+/** Re-render whenever a streaming (Watch) search session updates. */
+export function useWatchSession(session: WatchSearchSession | null): void {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!session) return;
+    const prev = session.onChange;
+    session.onChange = () => setTick((n) => n + 1);
+    return () => {
+      session.onChange = prev;
+    };
   }, [session]);
 }
 

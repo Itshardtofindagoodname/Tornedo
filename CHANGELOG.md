@@ -2,6 +2,112 @@
 
 All notable changes to this project are documented in this file.
 
+## [5.0.0] - 2026-08-28
+
+### Features
+
+- **Watch mode (streaming).** `tab` on the home screen flips the search into
+  streaming mode — one query searches **MovieBox**, **4KHDHub** and your
+  installed Stremio addons (Cinemeta ships by default) concurrently, and
+  results come back as poster rows instead of torrents. Series browse down to
+  per-episode release lists (MovieBox season info, 4KHDHub release pages);
+  `enter` plays the selected stream in **mpv / VLC / IINA** and `d` downloads it
+  with Range-resume. Subtitles (MovieBox external captions), a resolution
+  picker, "open with…", favorites (`*`) and a watch history are all wired in.
+- **All sources ship enabled.** Watch searches now run across **MovieBox**,
+  **4KHDHub**, your addons, **BDIX** and the **Torrent** engine with zero setup:
+  - **BDIX** (CircleFTP — the publicly reachable BD gateway) is on by default.
+    It only works from supported Bangladeshi ISP networks; elsewhere the source
+    shows nothing ("unreachable") instead of erroring, and a dead endpoint is
+    latched so searches skip it for a few minutes rather than stalling.
+  - **Anime Kitsu is bundled** alongside Cinemeta, so anime catalogs/meta work
+    out of the box without installing the third-party addon.
+  - **Torrent sources.** Watch search now includes ranked results from
+    Tornedo's own torrent engine (`searchOnce` — capped at ~7s so stragglers
+    never stall the UI). Playing a torrent item streams it through **WebTorrent**
+    over a local HTTP Range server (lazy-loaded so search stays fast, torn down
+    on suspend), picking the best matching file and resolving a magnet for the
+    player. The usual release metadata (seeders, size, source, resolution)
+    surfaces in the stream row.
+- **Live TV.** Register any m3u8 playlist (`tornedo tv add <url> [name]`);
+  matching channels surface in Watch-mode searches with a `live tv` tag and
+  play straight from their stream URL. `tornedo tv list|search|test|remove`
+  manage and probe playlists, plus the usual `--json` output.
+- **Themes.** A MovieBox-Tui-style theme engine with 9 palettes (mocha, latte,
+  macchiato, frappe, nord, tokyonight, dracula, gruvbox, rosepine) plus the
+  original Tornedo `default`. Theme applies live from Settings.
+- **New config keys**: `searchAction`, `streamingEnabled`, `bdixEnabled`,
+  `defaultPlayer`, `streamDownloadDir`, `theme`.
+- **mpv position tracking** — a tiny Lua script records position/duration on
+  exit so *Continue watching* can resume at the right offset.
+- **`tornedo addons`** — a first-class way to manage Stremio addons without
+  hand-editing files: `list` (shows each addon's stream capability),
+  `add <url>` (fetches and validates the manifest before installing),
+  `remove <url|id>` and `clear`. Cinemeta + Anime Kitsu remain the bundled
+  defaults, and a fresh install falls back to them automatically.
+
+### Notes
+
+- Requires at least one external player (mpv, VLC or IINA) for playback.
+- Bumped the published version to 5.0.0.
+
+### Fixes
+
+- **External players are now found at their default install locations.**
+  VLC/mpv/IINA installed to standard paths (Windows `Program Files`, Homebrew,
+  Flatpak/Snap) are detected without being on PATH, and explicit
+  `TORNEDO_MPV_PATH`/`TORNEDO_VLC_PATH`/`TORNEDO_IINA_PATH` overrides win first,
+  mirroring the reference MovieBox-Tui probe order. This fixes "open with" not
+  listing VLC on Windows.
+- **Poster art rendered brighter and undistorted.** The half-block renderer's
+  grid was sized for one pixel row but indexed for two, so the bottom half of
+  every cell silently fell through to the terminal background — posters looked
+  short and washed out. The grid is now `rows*2` tall, covers are fit with
+  aspect-ratio-preserving letterboxing (contain) instead of being squashed,
+  and edge-cell transparency is blended by coverage instead of dropped.
+  Wide terminals additionally render posters at higher resolution (results
+  `8×6→10×8`, details `14×11→16×13`).
+- **VLC runs with `--play-and-exit`** and Windows subtitle paths are
+  normalized to forward slashes so `--sub-file` parses instead of exploding.
+- **Cinemeta details/streams no longer fail on prefixed ids.**
+  Double-prefixed ids like `cinemeta:cinemeta:tt…` were mis-classified as
+  series by a naive type guess, so movies returned `addon meta empty …` and
+  "No streams found for this title." Details now probe the Stremio meta types
+  just like the reference (series/tv/anime first, movie as the fallback) and
+  streams use the catalog's real media type instead of the id guess.
+- **Addon streams respect manifest capabilities.** Cinemeta (the default
+  addon) only serves `catalog`/`meta` — its `/stream/…` endpoints 404 by
+  design. Streams are now gated on the manifest's `stream` resource exactly
+  like the reference's `provides_stream`, network failures count as "no
+  streams" instead of shouting `… → 404`, torrent-only results surface a
+  "blocked (raw torrents)" warning, and the empty state explains that a
+  stream provider must be installed — instead of a raw URL error.
+- **Addon results are playable out of the box.** When an addon title has no
+  HTTP streams (Cinemeta has no `stream` resource, and most other free addons
+  only serve raw torrents), Watch mode now auto-falls back to the same title
+  on the bundled **MovieBox** / **4KHDHub** providers — so nothing about
+  streaming shows as "broken" and the user never has to install anything. The
+  "no stream provider" notice only appears when a title genuinely has no
+  playable streams anywhere, matching what MovieBox-Tui itself reports.
+  (MovieBox-Tui hides this entirely because its default config has addons
+  disabled; we keep addons on for better discovery and simply route playback
+  to the bundled providers.)
+- **Torrent playback opens the player instantly.** The WebTorrent engine is
+  preloaded as soon as a search returns torrent results, and the highlighted
+  release's metadata is fetched in the background while you browse streams (no
+  pieces download until `enter`). Playing then reuses the memoized local HTTP
+  server, so mpv/VLC opens immediately like MovieBox-Tui instead of waiting on
+  the engine/peer lookup.
+- **Streaming no longer crashes on a premature client close.** A player that
+  seeks or closes the connection mid-stream made WebTorrent's streamx pipe
+  surface `StreamError: Writable stream closed` (`PREMATURE_CLOSE`) with no
+  listener — uncaught, it killed the process. Disconnects are now treated as a
+  normal player abort.
+- **Poster art removed from the Watch UI.** Results and details render as
+  compact text rows instead of half-block poster art (which either never
+  fetched or printed as pixel noise). Roughly 3–4× more results fit per screen,
+  and the poster fetch/decode workbench no longer runs under the hood.
+
 ## [4.1.0] - 2026-08-25
 
 ### Fixes

@@ -7,35 +7,33 @@
  * All colors are truecolor hex values; Ink degrades gracefully on 256-color
  * terminals. The same information is always carried by glyphs and typography,
  * never by color alone.
+ *
+ * The palette is mutable: the streaming "Watch" mode ships MovieBox-Tui
+ * themes (see src/stream/themes.ts), and `applyTheme` swaps the shared
+ * palette object in place so every component re-renders with the new colors.
  */
-export const palette = {
-  bg: "#0e0e11",
-  surface: "#16161a",
-  surfaceAlt: "#1c1c22",
-  border: "#26262e",
-  text: "#e8e8ea",
-  subtext: "#e8cc60",
-  dim: "#ddb844",
-  faint: "#cea038",
+import { resolveTheme, THEME_NAMES, type ThemeName } from "../stream/themes.js";
 
-  /** Warm electric yellow — the Tornedo lightning accent. */
-  accent: "#f2c14e",
-  accentBright: "#ffd97a",
-  accentDim: "#8f7225",
+export type PaletteKey = import("../stream/themes.js").ThemeKey;
 
-  /** Semantic colors. */
-  amber: "#d9a441",
-  orange: "#e8893b",
-  green: "#7fbf7f",
-  red: "#d96a5f",
+export const palette: Record<PaletteKey, string> = { ...resolveTheme("default") };
 
-  /** Supporting colors (never bright blue). */
-  teal: "#5cbea8",
-  cyan: "#5fb0c0",
-  magenta: "#a98cc4",
-} as const;
+let currentTheme: ThemeName = "default";
 
-export type PaletteKey = keyof typeof palette;
+export function applyTheme(name: string): void {
+  const resolved = resolveTheme(name);
+  const key = (THEME_NAMES as readonly string[]).includes(name) ? (name as ThemeName) : "default";
+  for (const k of Object.keys(palette) as PaletteKey[]) {
+    palette[k] = resolved[k];
+  }
+  currentTheme = key;
+}
+
+export function currentThemeName(): ThemeName {
+  return currentTheme;
+}
+
+export const THEME_CHOICES = THEME_NAMES;
 
 /** Braille spinner frames; index advances on a timer. */
 export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;

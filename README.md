@@ -78,6 +78,11 @@ tornedo                        # terminal UI
   and reports each check with an actionable fix.
 - 👀 **Watch mode** — drop `.torrent` or `.magnet`/magnet-URI files into a folder
   and they are added automatically.
+- 🎬 **Stream & watch** — `tab` on the home screen flips into streaming mode:
+  search MovieBox, 4KHDHub and your Stremio addons (Cinemeta ships by default),
+  browse results and episode lists, and play direct streams in
+  **mpv/VLC/IINA** with subtitles, per-episode resumes, one-click downloads,
+  favorites and a watch history — all terminal-native.
 - 🔒 **Private by design** — no accounts, no tracking, no analytics. Config and
   database live on your machine.
 
@@ -185,6 +190,16 @@ tornedo files <input>      List a torrent's files before downloading
 tornedo watch <dir>        Watch a directory for .torrent / magnet files
 tornedo history            List recent searches
 tornedo history --clear    Clear recent search history
+tornedo tv                 List live-TV playlists (Watch mode)
+tornedo tv add <url> [n]   Add a live-TV playlist (m3u8 url / file path)
+tornedo tv remove <name>   Remove a live-TV playlist
+tornedo tv search <q>      Search live-TV channels across configured playlists
+tornedo tv test <url>      Probe a playlist, report channels / groups
+tornedo tv clear           Remove all live-TV playlists
+tornedo addons             List installed Stremio addons (Watch mode)
+tornedo addons add <url>   Install a Stremio addon (validates manifest)
+tornedo addons remove <u>  Remove an installed addon
+tornedo addons clear       Forget all installed addons (Cinemeta stays)
 tornedo config             Show / set configuration
 tornedo sources            List sources and their enabled state
 tornedo sources --check    Diagnose Torznab / Internet Archive providers
@@ -225,6 +240,59 @@ Common flags: `--json` (machine-readable output on stdout only), `--source <id>`
 | `o` | open selected magnet in your default handler |
 | `?` | help |
 | `q` | quit |
+
+### ▶️ Watch mode (streaming)
+
+`tab` on the home screen toggles the search into **streaming mode** — enter
+runs a streaming search across **MovieBox**, **4KHDHub**, your installed
+Stremio addons (Cinemeta + Anime Kitsu ship by default), any **live-TV
+playlists** and the **Torrent** source (ranked results from Tornedo's own
+torrent engine), returning matching titles instead of torrents. `enter` opens the
+title; series show an episode list (`tab` switches between episodes and
+streams); `enter` plays the selected stream in **mpv / VLC / IINA**; live-TV
+channels play straight from their m3u8 URL. `d` downloads a stream (Range
+resume via `.part` files), `s` picks subtitles (MovieBox), `o` opens with a
+chosen player, `R` switches resolution, `*` toggles a favorite. mpv writes its
+position back on exit so *Continue watching* resumes where you left off;
+favorites and history are stored under the data dir. Install at least one
+player for playback.
+
+Everything ships enabled out of the box — no addon, playlist or config step
+is required to start watching:
+
+- **MovieBox** and **4KHDHub** play most movies/series directly.
+- **BDIX** (CircleFTP, Bangladesh-ISP only) is enabled by default; on networks
+  that can't reach Bangladeshi links it simply shows nothing ("unreachable")
+  instead of erroring, and the search skips a dead BDIX endpoint for a few
+  minutes so it never slows you down. Toggle it with the `bdixEnabled` config
+  key (Settings or `tornedo config set`).
+- **Addons** enrich search and home rows; torrent-only results fall back to the
+  bundled providers for playback.
+- **Torrent** results stream through **WebTorrent**: selecting one starts
+  streaming the best file over a local HTTP stream, playing in your player while
+  pieces download.
+- **IPTV** lives under `tornedo tv` — add any m3u8 playlist (URL or file) and
+  channels appear in watch searches with a `live tv` tag.
+
+```
+tornedo addons list                # installed addons + stream capability
+tornedo addons add <url>           # install an addon (manifest is validated)
+tornedo addons remove <url|id>     # uninstall one
+tornedo addons clear               # forget all (Cinemeta + Kitsu stay as defaults)
+```
+
+An addon marked `streams: no` still helps discovery — Watch mode will find
+playable streams for its results on the bundled providers.
+
+| Watch key | Action |
+| :--- | :--- |
+| `tab` | toggle home search between **download** (torrents) and **watch** (streaming) |
+| `enter` | play the selected stream / open the selected episode list |
+| `d` | download the selected stream with resume support |
+| `s` | pick subtitles for the selected stream |
+| `o` | open the selected stream with a chosen player |
+| `R` | choose a resolution (MovieBox/4KHDHub) |
+| `*` / `f` | toggle favorite |
 
 Keybindings are configurable under `keybindings` in the config file.
 
@@ -280,6 +348,12 @@ Set `TORNEDO_STATE_DIR` to relocate both (also used by the test suite).
 | `ranking.*` | ranking weights (seeders, quality, health, size) |
 | `keybindings.*` | action -> key names (see `tornedo help`) |
 | `watchIntervalMs` | watch-mode poll interval |
+| `searchAction` | what `enter` on home does: `"download"` (torrents) or `"watch"` (streaming) |
+| `streamingEnabled` | master switch for streaming ("Watch") providers |
+| `bdixEnabled` | Bangladesh-ISP-only BDIX providers (CircleFTP; on by default) |
+| `defaultPlayer` | preferred player: `"mpv"`, `"vlc"`, `"iina"`, or `null` = auto-detect |
+| `streamDownloadDir` | where Watch-mode downloads land (`null` = `downloadDir`) |
+| `theme` | terminal theme: `default`, `mocha`, `latte`, `macchiato`, `frappe`, `nord`, `tokyonight`, `dracula`, `gruvbox`, `rosepine` |
 | `torznabProviders[]` | user-configured Torznab/Newznab endpoints (see below) |
 | `internetArchive` | Internet Archive provider settings (below) |
 

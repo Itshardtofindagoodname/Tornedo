@@ -52,3 +52,33 @@ export function defaultDownloadDir(): string {
 export function watchStateFile(): string {
   return path.join(dataDir(), "watch-state.json");
 }
+
+/** Root folder for streaming ("Watch") support data. */
+export function streamDataDir(): string {
+  return path.join(dataDir(), "stream");
+}
+
+/** Watch-mode favorites file. */
+export function favoritesFile(): string {
+  return path.join(streamDataDir(), "favorites.json");
+}
+
+/** Watch-mode watch-history file. */
+export function streamHistoryFile(): string {
+  return path.join(streamDataDir(), "history.json");
+}
+
+/** User-installed Stremio addons list. */
+export function addonsFile(): string {
+  return path.join(streamDataDir(), "addons.json");
+}
+
+/** Live-TV playlist sources (urls or local file paths). */
+export function tvFile(): string {
+  return path.join(streamDataDir(), "tv.json");
+}
+
+/** Poster byte cache (base64 within a single TTL JSON file). */
+export function posterCacheFile(): string {
+  return path.join(streamDataDir(), "posters.json");
+}

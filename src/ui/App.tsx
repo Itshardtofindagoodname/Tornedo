@@ -10,13 +10,21 @@
 import { useEffect, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useWindowSize, type Key } from "ink";
 import { spawn } from "node:child_process";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import type { Application } from "../app/application.js";
 import { MAX_RECENT_SEARCHES } from "../app/application.js";
 import type { SearchSession, SourceReport } from "../app/search-service.js";
-import type { KeyAction } from "../config/config.js";
+import type { DownloadAction, KeyAction } from "../config/config.js";
 import { MEDIA_CATEGORIES, type MediaCategory } from "../model/search.js";
 import type { Release } from "../model/search.js";
 import type { TorrentFileInfo, TorrentItem } from "../model/torrent.js";
+import type { Favorite } from "../stream/favorites.js";
+import { StreamCatalogItem, StreamDetails, StreamRelease, StreamSubtitleOption } from "../stream/models.js";
+import { WatchSearchSession } from "../stream/session.js";
+import { StreamDownloader, type DownloadProgress } from "../stream/download.js";
+import { readTrackerState } from "../stream/history.js";
+import { detectPlayers, pickPlayer, spawnPlayer, writeTrackerScript } from "../stream/players.js";
 import {
   parseFilterText,
   SORT_OPTIONS,
@@ -39,16 +47,19 @@ import {
 import { DetailView } from "./DetailView.js";
 import { DownloadsView } from "./DownloadsView.js";
 import { HelpView } from "./HelpView.js";
-import { useManagerEvents, useRecovery, useRerenderInterval, useSearchSession } from "./hooks.js";
+import { useManagerEvents, useRecovery, useRerenderInterval, useSearchSession, useWatchSession } from "./hooks.js";
 import { firstKey, matchKey } from "./keys.js";
 import { filteredReleases, ResultsView } from "./ResultsView.js";
 import { SearchHome } from "./SearchHome.js";
 import { SettingsView, type SettingsRow } from "./SettingsView.js";
 import { SourcesView } from "./SourcesView.js";
+import { applyTheme, currentThemeName, THEME_CHOICES } from "./theme.js";
 import { palette } from "./theme.js";
 import { applyTyping } from "./text.js";
+import { WatchDetails, flattenEpisodes, type WatchDownloadState } from "./WatchDetails.js";
+import { WatchResults } from "./WatchResults.js";
 
-type View = "home" | "results" | "details" | "downloads" | "sources" | "settings" | "help";
+type View = "home" | "results" | "details" | "downloads" | "sources" | "settings" | "help" | "watch" | "watchdetails";
 
 type Overlay =
   | { kind: "prompt"; title: string; hint?: string; onSubmit: (value: string) => void }
@@ -81,6 +92,30 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   const [filter, setFilter] = useState("");
   const [session, setSession] = useState<SearchSession | null>(null);
 
+  // --- watch (streaming) state -------------------------------------------------
+  const [searchAction, setSearchAction] = useState<DownloadAction>(() => app.getConfig().searchAction);
+  const [watchSession, setWatchSession] = useState<WatchSearchSession | null>(null);
+  const [watchDetails, setWatchDetails] = useState<{ item: StreamCatalogItem } | null>(null);
+  const [watchMeta, setWatchMeta] = useState<{ details: StreamDetails | null; loading: boolean; error: string | null }>({ details: null, loading: false, error: null });
+  const [watchSeason, setWatchSeason] = useState(0);
+  const [watchEpisode, setWatchEpisode] = useState(0);
+  const [watchPane, setWatchPane] = useState<"episodes" | "streams">("streams");
+  const [watchPaneCursor, setWatchPaneCursor] = useState(0);
+  const [watchReleases, setWatchReleases] = useState<{
+    releases: StreamRelease[];
+    subtitles: StreamSubtitleOption[];
+    resolutions: string[];
+    loading: boolean;
+    error: string | null;
+    notice: string | null;
+  }>({ releases: [], subtitles: [], resolutions: [], loading: false, error: null, notice: null });
+  const [watchResolution, setWatchResolution] = useState("");
+  const [watchSubtitle, setWatchSubtitle] = useState<string | undefined>(undefined);
+  const [watchDownload, setWatchDownload] = useState<WatchDownloadState | null>(null);
+  const [watchIsFav, setWatchIsFav] = useState(false);
+  const [favorites, setFavorites] = useState<Favorite[]>([]);
+  const [themeTick, setThemeTick] = useState(0);
+
   // --- refinement state -----------------------------------------------------
   const [sortOption, setSortOption] = useState<SortOption>(SORT_OPTIONS[0]!);
   const [categoryScope, setCategoryScope] = useState<MediaCategory | null>(null);
@@ -110,8 +145,17 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
 
   const tick = useRerenderInterval(250);
   useSearchSession(session);
+  useWatchSession(watchSession);
   useManagerEvents(app);
   const recovery = useRecovery(app);
+
+  // Boot: apply the configured theme and load watch favorites once.
+  useEffect(() => {
+    applyTheme(app.getConfig().theme);
+    if (app.favorites !== undefined && typeof app.favorites.list === "function") {
+      void app.favorites.list().then(setFavorites).catch(() => undefined);
+    }
+  }, [app]);
 
   // Cancel any running search when the app tears down (or a newer one starts).
   useEffect(() => {
@@ -124,6 +168,35 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
     if (messageTimer.current) clearTimeout(messageTimer.current);
     messageTimer.current = setTimeout(() => setMessage(null), 5000);
   };
+
+  // Pre-warm torrent playback so the player window opens the instant `enter` is
+  // pressed (like MovieBox-Tui). The WebTorrent engine is loaded as soon as a
+  // search returns torrent results; here we additionally fetch each highlighted
+  // release's metadata in the background (no pieces are downloaded). A later
+  // resolve() then reuses the memoized serve and returns in a few milliseconds.
+  const warmTorrentFor = (rel: StreamRelease): void => {
+    const mirror = rel.mirrors[0];
+    if (mirror !== undefined && mirror.resolverUrl.startsWith("magnet:")) {
+      try {
+        app.warmWatchStream(rel, mirror);
+      } catch {
+        /* best effort */
+      }
+    }
+  };
+  useEffect(() => {
+    if (watchReleases.releases.length === 0) return;
+    // The top release is what enter plays by default — warm it immediately.
+    const top = watchReleases.releases[0];
+    if (top !== undefined) warmTorrentFor(top);
+  }, [watchReleases.releases]);
+  useEffect(() => {
+    const releases = watchReleases.releases;
+    const rel = releases[Math.min(Math.max(watchPaneCursor, 0), releases.length - 1)];
+    if (rel === undefined) return;
+    const t = setTimeout(() => warmTorrentFor(rel), 250);
+    return () => clearTimeout(t);
+  }, [view, watchPane, watchPaneCursor, watchReleases.releases]);
 
   // Once the details view's torrent resolves its metadata, initialize the file
   // checkboxes (everything checked by default) so the user can adjust them.
@@ -170,10 +243,332 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
       case "details":
         setView("results");
         break;
+      case "watch":
+        goHome();
+        break;
+      case "watchdetails":
+        setView("watch");
+        break;
       default:
         setView(prevView.current);
         break;
     }
+  };
+
+  // --- watch (streaming) -------------------------------------------------------
+
+  const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+  const toggleSearchMode = (): void => {
+    const next: DownloadAction = searchAction === "watch" ? "download" : "watch";
+    setSearchAction(next);
+    void app.updateConfig({ searchAction: next });
+    showMessage(next === "watch" ? "Watch mode — enter searches streaming sources (tab to switch back)." : "Download mode — enter searches torrents (tab to switch).");
+  };
+
+  const startWatchSearch = (q?: string): void => {
+    const text = (q ?? query).trim();
+    if (!text) {
+      showMessage("Type a query first.");
+      return;
+    }
+    if (watchSession) watchSession.cancel();
+    const s = new WatchSearchSession(app.streams, text);
+    setWatchSession(s);
+    setWatchDetails(null);
+    setWatchMeta({ details: null, loading: false, error: null });
+    setWatchReleases({ releases: [], subtitles: [], resolutions: [], loading: false, error: null, notice: null });
+    setWatchDownload(null);
+    setView("watch");
+    setRecentActive(false);
+    setRecentIndex(0);
+    app.addRecentSearch(text);
+    setRecentQueries((prev) => [text, ...prev.filter((x) => x !== text)].slice(0, MAX_RECENT_SEARCHES));
+    void s.run();
+  };
+
+  const isFavoriteItem = (item: StreamCatalogItem): boolean => favorites.some((f) => f.id === item.id);
+
+  const loadWatchStreams = (item: StreamCatalogItem, season: number, episode: number, resolution: string): void => {
+    setWatchReleases({ releases: [], subtitles: [], resolutions: [], loading: true, error: null, notice: null });
+    void app.streams
+      .releaseSources(item, season, episode, resolution)
+      .then((res) => {
+        setWatchReleases({ releases: res.releases, subtitles: res.subtitles, resolutions: res.resolutions, loading: false, error: null, notice: res.notice ?? null });
+      })
+      .catch((err) => {
+        setWatchReleases((prev) => ({ ...prev, loading: false, error: messageOf(err) }));
+      });
+  };
+
+  const openWatchDetails = (): void => {
+    const item = watchSession?.selected;
+    if (!item) return;
+    setWatchDetails({ item });
+    setWatchSeason(0);
+    setWatchEpisode(0);
+    setWatchPane("streams");
+    setWatchPaneCursor(0);
+    setWatchResolution("");
+    setWatchSubtitle(undefined);
+    setWatchDownload(null);
+    setWatchMeta({ details: null, loading: true, error: null });
+    setWatchReleases({ releases: [], subtitles: [], resolutions: [], loading: false, error: null, notice: null });
+    void app.favorites.is(item).then(setWatchIsFav).catch(() => setWatchIsFav(false));
+    setView("watchdetails");
+    void app.streams
+      .details(item)
+      .then((details) => {
+        setWatchMeta({ details, loading: false, error: null });
+        if (details.mediaType === "series" && details.seasons.length > 0) {
+          const firstSeason = details.seasons[0]!;
+          const season = firstSeason.number;
+          const episode = firstSeason.episodes[0]?.number ?? 1;
+          setWatchSeason(season);
+          setWatchEpisode(episode);
+          setWatchPane("episodes");
+          loadWatchStreams(item, season, episode, "");
+        } else {
+          setWatchPane("streams");
+          loadWatchStreams(item, 0, 0, "");
+        }
+      })
+      .catch((err) => {
+        setWatchMeta({ details: null, loading: false, error: messageOf(err) });
+      });
+  };
+
+  const selectWatchEpisode = (): void => {
+    const item = watchDetails?.item;
+    const details = watchMeta.details;
+    if (!item || !details) return;
+    const flat = flattenEpisodes(details);
+    const ep = flat[Math.min(watchPaneCursor, flat.length - 1)];
+    if (!ep) return;
+    setWatchSeason(ep.season);
+    setWatchEpisode(ep.number);
+    setWatchPane("streams");
+    setWatchPaneCursor(0);
+    setWatchDownload(null);
+    loadWatchStreams(item, ep.season, ep.number, watchResolution);
+  };
+
+  const currentStreamRelease = (): StreamRelease | null => {
+    const releases = watchReleases.releases;
+    const idx = Math.min(watchPaneCursor, releases.length - 1);
+    return releases[idx] ?? null;
+  };
+
+  const playWatchStream = (playerId: string | null): void => {
+    const item = watchDetails?.item;
+    const rel = currentStreamRelease();
+    if (!item || !rel) return;
+    const mirror = rel.mirrors[0];
+    if (!mirror) {
+      showMessage("No playable mirror for this stream.");
+      return;
+    }
+    const player = pickPlayer(playerId ?? app.getConfig().defaultPlayer);
+    if (!player) {
+      showMessage("No media player found. Install mpv, VLC or IINA to play.");
+      return;
+    }
+    const title = `${item.title}${watchSeason > 0 ? ` S${watchSeason}E${watchEpisode}` : ""}`;
+    const mediaType = item.mediaType === "series" ? "series" : item.mediaType === "tv" ? "tv" : "movie";
+    const season = watchSeason > 0 ? watchSeason : undefined;
+    const episode = watchEpisode > 0 ? watchEpisode : undefined;
+    void (async () => {
+      const prior = await app.history.find({ id: item.id, season, episode });
+      const startSeconds = prior !== undefined && prior.time > 30 && !prior.completed ? prior.time : 0;
+      showMessage(`Playing with ${player.name}…`);
+      const trackerFile = player.id === "mpv" ? await writeTrackerScript() : undefined;
+      const source = await app.streams.resolve(item, rel, mirror, watchSubtitle);
+      const child = spawnPlayer(player, {
+        url: source.url,
+        headers: source.headers,
+        subtitle: source.subtitle,
+        title,
+        startSeconds,
+        trackerStateFile: trackerFile,
+      });
+      if (trackerFile !== undefined) {
+        child.once("exit", () => {
+          void reconcilePlayback(trackerFile, item, season, episode);
+        });
+      }
+      child.unref();
+      await app.history.record({
+        provider: item.provider,
+        id: item.id,
+        title: item.title,
+        year: item.year,
+        posterUrl: item.posterUrl,
+        mediaType,
+        season,
+        episode,
+        time: 0,
+        duration: 0,
+        completed: false,
+      });
+    })().catch((err) => showMessage(`Playback failed: ${messageOf(err)}`));
+  };
+
+  const reconcilePlayback = async (trackerFile: string, item: StreamCatalogItem, season?: number, episode?: number): Promise<void> => {
+    const state = await readTrackerState(trackerFile);
+    await rm(trackerFile, { force: true }).catch(() => undefined);
+    if (state === null) return;
+    const ref = { id: item.id, season, episode };
+    const duration = state.duration > 0 ? state.duration : 0;
+    const time = Math.max(0, Math.min(state.time, duration > 0 ? duration : state.time));
+    if (duration > 0 && time > duration - 120) {
+      await app.history.markCompleted(ref);
+    } else {
+      await app.history.updateProgress(ref, time, duration);
+    }
+  };
+
+  const downloadWatchStream = (): void => {
+    const item = watchDetails?.item;
+    const rel = currentStreamRelease();
+    if (!item || !rel) return;
+    const mirror = rel.mirrors[0];
+    if (!mirror) {
+      showMessage("No downloadable mirror for this stream.");
+      return;
+    }
+    const dir = app.streamDownloadDir();
+    const safeName = rel.filename.replace(/[\\/:*?"<>|]/g, "_").trim() || `tornedo-${item.title.slice(0, 40)}.mp4`;
+    const dest = join(dir, safeName);
+    setWatchDownload({ phase: "resolving", label: safeName, percent: null, speed: null });
+    const downloader = new StreamDownloader();
+    void app.streams
+      .resolve(item, rel, mirror)
+      .then((source) =>
+        downloader.download({
+          url: source.url,
+          headers: source.headers,
+          dest,
+          retries: 3,
+          onProgress: (p: DownloadProgress) =>
+            setWatchDownload({ phase: "downloading", label: safeName, percent: p.percent, speed: p.rateBytesPerSec }),
+        }),
+      )
+      .then((result) => {
+        setWatchDownload({ phase: "done", label: safeName, percent: 1, speed: null, message: result.path });
+      })
+      .catch((err) => {
+        setWatchDownload({ phase: "error", label: safeName, percent: null, speed: null, message: messageOf(err) });
+      });
+  };
+
+  const refreshFavorites = (): void => {
+    void app.favorites.list().then(setFavorites).catch(() => undefined);
+  };
+
+  const toggleWatchFavorite = (): void => {
+    const item = watchDetails?.item ?? watchSession?.selected;
+    if (!item) return;
+    void app.favorites
+      .toggle(app.favorites.fromItem(item))
+      .then((isNow) => {
+        setWatchIsFav(isNow);
+        refreshFavorites();
+        if (item.mediaType === "series" && watchSeason > 0 && watchEpisode > 0) {
+          showMessage(isNow ? `★ ${item.title} S${watchSeason}E${watchEpisode}` : `Removed ${item.title} S${watchSeason}E${watchEpisode} ★`);
+        } else {
+          showMessage(isNow ? `★ ${item.title} added to favorites` : `Removed ${item.title} from favorites`);
+        }
+      })
+      .catch((err) => showMessage(`Favorite: ${messageOf(err)}`));
+  };
+
+  const openSubtitlesPicker = (): void => {
+    const item = watchDetails?.item;
+    const rel = currentStreamRelease();
+    if (!item || !rel) return;
+    if (item.provider !== "moviebox") {
+      showMessage("This source offers no subtitles. Load a subtitle file in the player instead.");
+      return;
+    }
+    void app.streams
+      .subtitles(item, rel.resourceId ?? "")
+      .then((list) => {
+        if (list.length === 0) {
+          showMessage("No subtitles available for this stream.");
+          return;
+        }
+        const opts: SelectOption<string>[] = [
+          { value: "__none__", label: "No subtitle" },
+          ...list.map((s) => ({ value: s.url, label: s.name })),
+        ];
+        const cur = opts.findIndex((o) => o.value === watchSubtitle);
+        openSelect("subtitles", opts, (v) => {
+          setWatchSubtitle(v === "__none__" ? undefined : v);
+          showMessage(v === "__none__" ? "Subtitle cleared." : "Subtitle attached to next playback.");
+        }, Math.max(0, cur), "↑/↓ move · enter pick · esc close");
+      })
+      .catch((err) => showMessage(`Subtitles unavailable: ${messageOf(err)}`));
+  };
+
+  const openResolutionPicker = (): void => {
+    const item = watchDetails?.item;
+    if (!item) return;
+    const opts: SelectOption<string>[] = [{ value: "", label: "Auto" }, ...watchReleases.resolutions.map((r) => ({ value: r, label: r }))];
+    const cur = opts.findIndex((o) => o.value === watchResolution);
+    openSelect("resolution", opts, (v) => {
+      setWatchResolution(v);
+      setWatchPaneCursor(0);
+      setWatchDownload(null);
+      loadWatchStreams(item, watchSeason, watchEpisode, v);
+    }, Math.max(0, cur), "↑/↓ move · enter pick · esc close");
+  };
+
+  const openPlayerPicker = (): void => {
+    const players = detectPlayers();
+    const opts: SelectOption<string>[] = [
+      { value: "", label: "Auto", hint: players[0] !== undefined ? `first available: ${players[0].name}` : "none found" },
+      ...players.map((p) => ({ value: p.id, label: p.name, hint: p.command })),
+    ];
+    openSelect("open with", opts, (v) => {
+      playWatchStream(v === "" ? null : v);
+    }, 0, "↑/↓ move · enter play · esc close");
+  };
+
+  const openWatchActionsMenu = (): void => {
+    const item = watchDetails?.item;
+    if (!item) return;
+    const opts: SelectOption<string>[] = [
+      { value: "play", label: "Play", hint: "open in media player" },
+      { value: "open", label: "Open with…", hint: "choose the player" },
+    ];
+    if (watchPane === "streams") {
+      opts.push({ value: "download", label: "Download stream", hint: app.streamDownloadDir() });
+      opts.push({ value: "subtitles", label: "Subtitles", hint: "for this stream" });
+    }
+    opts.push({ value: "resolution", label: "Resolution", hint: watchResolution || "auto" });
+    opts.push({ value: "favorite", label: watchIsFav ? "Remove favorite" : "Add favorite", hint: "★" });
+    openSelect("actions", opts, (v) => {
+      switch (v) {
+        case "play":
+          playWatchStream(null);
+          break;
+        case "open":
+          openPlayerPicker();
+          break;
+        case "download":
+          downloadWatchStream();
+          break;
+        case "subtitles":
+          openSubtitlesPicker();
+          break;
+        case "resolution":
+          openResolutionPicker();
+          break;
+        case "favorite":
+          toggleWatchFavorite();
+          break;
+      }
+    });
   };
 
   // --- search ---------------------------------------------------------------
@@ -645,6 +1040,14 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
       { type: "header", label: "SEARCH" },
       { type: "item", id: "sourceTimeoutMs", label: "Source timeout", value: `${cfg.sourceTimeoutMs} ms` },
       { type: "toggle", id: "internetArchive", label: "Internet Archive", value: cfg.internetArchive.enabled },
+      { type: "header", label: "WATCH" },
+      { type: "toggle", id: "streamingEnabled", label: "Streaming providers", value: cfg.streamingEnabled },
+      { type: "toggle", id: "bdixEnabled", label: "BDIX (Bangladesh ISPs)", value: cfg.bdixEnabled },
+      { type: "item", id: "searchAction", label: "Search mode", value: cfg.searchAction === "watch" ? "watch" : "download" },
+      { type: "item", id: "streamDownloadDir", label: "Stream download dir", value: cfg.streamDownloadDir ?? cfg.downloadDir },
+      { type: "item", id: "defaultPlayer", label: "Default player", value: cfg.defaultPlayer ?? "auto (detect)" },
+      { type: "header", label: "APPEARANCE" },
+      { type: "item", id: "theme", label: "Theme", value: currentThemeName() },
       { type: "header", label: "SOURCES" },
       ...app.sources.map((s) => ({ type: "source" as const, id: `source:${s.id}`, label: s.name, value: app.isSourceEnabled(s.id) })),
       { type: "header", label: "ADVANCED" },
@@ -727,6 +1130,38 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
             break;
           case "diskSpaceWarningMb":
             updateNumber("disk space warning (MiB)", (n) => ({ diskSpaceWarningMb: Math.floor(n) }));
+            break;
+          case "searchAction":
+            openSelect("search mode", [
+              { value: "download", label: "download", hint: "enter searches torrents" },
+              { value: "watch", label: "watch", hint: "enter searches streaming sources" },
+            ], (v) => {
+              const next = v as DownloadAction;
+              setSearchAction(next);
+              update({ searchAction: next });
+            }, cfg.searchAction === "watch" ? 1 : 0, "enter search to switch · esc close");
+            break;
+          case "streamDownloadDir":
+            openPrompt("stream download directory", cfg.streamDownloadDir ?? cfg.downloadDir, (v) => {
+              if (v.trim()) update({ streamDownloadDir: v.trim() });
+            });
+            break;
+          case "defaultPlayer": {
+            const players = detectPlayers();
+            openSelect("default player", [
+              { value: "", label: "auto (detect)", hint: "mpv > VLC > IINA" },
+              ...players.map((p) => ({ value: p.id, label: p.name, hint: p.command })),
+            ], (v) => {
+              update({ defaultPlayer: v === "" ? null : v });
+            }, cfg.defaultPlayer === null || cfg.defaultPlayer === "" ? 0 : Math.max(0, players.findIndex((p) => p.id === cfg.defaultPlayer) + 1));
+            break;
+          }
+          case "theme":
+            openSelect("theme", THEME_CHOICES.map((t) => ({ value: t, label: t })), (v) => {
+              applyTheme(v);
+              setThemeTick((n) => n + 1);
+              update({ theme: v });
+            }, Math.max(0, THEME_CHOICES.indexOf(currentThemeName())), "applies immediately");
             break;
           default:
             break;
@@ -986,6 +1421,11 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   };
 
   const handleHomeKey = (action: KeyAction | null, input: string, key: Key): void => {
+    // tab toggles between watch (streaming) and download (torrent) mode.
+    if (key.tab) {
+      toggleSearchMode();
+      return;
+    }
     // The search box must never eat letters: j/k are bound to up/down for
     // navigation elsewhere, but here they are query text.
     if ((action === "up" || action === "down") && input && input.length === 1 && !key.ctrl && !key.meta) {
@@ -1016,9 +1456,16 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
         }
         break;
       case "confirm":
-        if (recentActive) startSearch(recentQueries[recentIndex]);
-        else if (query.trim()) startSearch();
-        else showMessage("Type a query first.");
+        if (recentActive) {
+          const recent = recentQueries[recentIndex];
+          if (searchAction === "watch") startWatchSearch(recent);
+          else startSearch(recent);
+        } else if (query.trim()) {
+          if (searchAction === "watch") startWatchSearch();
+          else startSearch();
+        } else {
+          showMessage("Type a query first.");
+        }
         break;
       case "help":
         goto("help");
@@ -1041,6 +1488,134 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
     }
   };
 
+  const handleWatchResultsKey = (action: KeyAction | null, input: string): void => {
+    const ch = input.length === 1 ? input : "";
+    if (ch === "*" || ch.toLowerCase() === "f") {
+      toggleWatchFavorite();
+      return;
+    }
+    const last = Math.max(0, (watchSession?.results.length ?? 1) - 1);
+    switch (action) {
+      case "up":
+        watchSession?.move(-1);
+        break;
+      case "down":
+        watchSession?.move(1);
+        break;
+      case "pageup":
+        watchSession?.setIndex((watchSession?.index ?? 0) - PAGE_STEP);
+        break;
+      case "pagedown":
+        watchSession?.setIndex((watchSession?.index ?? 0) + PAGE_STEP);
+        break;
+      case "home":
+        watchSession?.setIndex(0);
+        break;
+      case "end":
+        watchSession?.setIndex(last);
+        break;
+      case "confirm":
+        if ((watchSession?.results.length ?? 0) > 0) openWatchDetails();
+        break;
+      case "search":
+        goHome();
+        break;
+      case "back":
+        goHome();
+        break;
+      case "help":
+        goto("help");
+        break;
+      default:
+        navigateAction(action);
+        break;
+    }
+  };
+
+  const watchPaneLast = (): number => {
+    if (watchPane === "episodes") {
+      const details = watchMeta.details;
+      return details !== null ? Math.max(0, flattenEpisodes(details).length - 1) : 0;
+    }
+    return Math.max(0, watchReleases.releases.length - 1);
+  };
+
+  const handleWatchDetailsKey = (action: KeyAction | null, input: string, key: Key): void => {
+    if (key.tab) {
+      const details = watchMeta.details;
+      if (details !== null && flattenEpisodes(details).length > 0) {
+        setWatchPane(watchPane === "episodes" ? "streams" : "episodes");
+        setWatchPaneCursor(0);
+        setWatchDownload(null);
+      }
+      return;
+    }
+    const ch = input.length === 1 ? input : "";
+    if (ch === "*" || ch === "f") {
+      toggleWatchFavorite();
+      return;
+    }
+    if (ch === "o") {
+      openPlayerPicker();
+      return;
+    }
+    if (ch === "s") {
+      openSubtitlesPicker();
+      return;
+    }
+    if (ch.toLowerCase() === "r" && ch === "R") {
+      openResolutionPicker();
+      return;
+    }
+    if (ch === "m") {
+      openWatchActionsMenu();
+      return;
+    }
+    const last = watchPaneLast();
+    switch (action) {
+      case "up":
+        setWatchPaneCursor((i) => Math.max(0, i - 1));
+        break;
+      case "down":
+        setWatchPaneCursor((i) => Math.min(last, i + 1));
+        break;
+      case "pageup":
+        setWatchPaneCursor((i) => Math.max(0, i - PAGE_STEP));
+        break;
+      case "pagedown":
+        setWatchPaneCursor((i) => Math.min(last, i + PAGE_STEP));
+        break;
+      case "home":
+        setWatchPaneCursor(0);
+        break;
+      case "end":
+        setWatchPaneCursor(last);
+        break;
+      case "confirm":
+        if (watchPane === "streams") playWatchStream(null);
+        else selectWatchEpisode();
+        break;
+      case "pause":
+        playWatchStream(null);
+        break;
+      case "download":
+        if (watchPane === "streams") downloadWatchStream();
+        break;
+      case "menu":
+        openWatchActionsMenu();
+        break;
+      case "back":
+        setView("watch");
+        break;
+      case "help":
+        goto("help");
+        break;
+      default:
+        navigateAction(action);
+        break;
+    }
+  };
+
   useInput((input, key) => {
     if (overlay) {
       handleOverlayKey(input, key);
@@ -1056,6 +1631,12 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
         break;
       case "details":
         handleDetailsKey(action, input);
+        break;
+      case "watch":
+        handleWatchResultsKey(action, input);
+        break;
+      case "watchdetails":
+        handleWatchDetailsKey(action, input, key);
         break;
       case "downloads":
         handleDownloadsKey(action);
@@ -1076,6 +1657,7 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   // --- layout -------------------------------------------------------------------
 
   const cfg = app.getConfig();
+  void themeTick; // theme changes re-render here (applyTheme mutates the palette)
   const bindings = cfg.keybindings;
   const fk = (action: KeyAction, fallback: string): string => firstKey(bindings, action, fallback);
 
@@ -1095,6 +1677,25 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
         { keys: fk("search", "/"), label: "search" },
         { keys: fk("downloads", "2"), label: "downloads" },
         { keys: fk("help", "?"), label: "help" },
+      ];
+      break;
+    case "watch":
+      hints = [
+        { keys: fk("confirm", "enter"), label: "open" },
+        { keys: "*", label: "favorite" },
+        { keys: fk("search", "/"), label: "search" },
+        { keys: "esc", label: "home" },
+        { keys: fk("help", "?"), label: "help" },
+      ];
+      break;
+    case "watchdetails":
+      hints = [
+        { keys: fk("confirm", "enter"), label: "play" },
+        { keys: fk("download", "d"), label: "download" },
+        { keys: "s", label: "subtitles" },
+        { keys: "o", label: "open with" },
+        { keys: "*", label: "favorite" },
+        { keys: "esc", label: "back" },
       ];
       break;
     case "details":
@@ -1184,7 +1785,34 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
             enabledSources={enabledSources}
             healthCounts={healthCounts}
             activeDownloads={summary.active}
+            searchAction={searchAction}
+            streamingEnabled={app.getConfig().streamingEnabled}
             compact={compact}
+          />
+        ) : null}
+        {view === "watch" && watchSession ? (
+          <WatchResults app={app} session={watchSession} isFavorite={isFavoriteItem} tick={tick} />
+        ) : null}
+        {view === "watchdetails" && watchDetails ? (
+          <WatchDetails
+            app={app}
+            item={watchDetails.item}
+            details={watchMeta.details}
+            loading={watchMeta.loading}
+            error={watchMeta.error}
+            pane={watchPane}
+            paneCursor={watchPaneCursor}
+            season={watchSeason}
+            episode={watchEpisode}
+            releases={watchReleases.releases}
+            resolutions={watchReleases.resolutions}
+            resolution={watchResolution}
+            sourcesLoading={watchReleases.loading}
+            sourcesError={watchReleases.error}
+            sourcesNotice={watchReleases.notice}
+            isFavorite={watchIsFav}
+            download={watchDownload}
+            tick={tick}
           />
         ) : null}
         {view === "results" ? (

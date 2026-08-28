@@ -1,0 +1,280 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "Cargo.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-version:
+    name: Check Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      is_new: ${{ steps.check.outputs.is_new }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Get version from Cargo.toml
+        id: check
+        run: |
+          VERSION=$(grep '^version =' Cargo.toml | head -1 | awk -F'"' '{print $2}')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          if gh release view "v$VERSION" &>/dev/null; then
+            echo "is_new=false" >> $GITHUB_OUTPUT
+            echo "Release v$VERSION already exists. Skipping build."
+          else
+            echo "is_new=true" >> $GITHUB_OUTPUT
+            echo "New version v$VERSION detected."
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  preflight:
+    name: Release preflight
+    needs: check-version
+    if: needs.check-version.outputs.is_new == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.90.0
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,x86_64-apple-darwin,aarch64-apple-darwin,x86_64-pc-windows-msvc,aarch64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "release-preflight"
+      - run: cargo package --locked
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: [check-version, preflight]
+    if: needs.check-version.outputs.is_new == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.90.0
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "release-build-${{ matrix.target }}"
+
+      - name: Install cross
+        if: matrix.os == 'ubuntu-latest'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build Linux binary
+        if: matrix.os == 'ubuntu-latest'
+        run: cross build --release --all-features --locked --target ${{ matrix.target }}
+
+      - name: Build macOS or Windows binary
+        if: matrix.os != 'ubuntu-latest'
+        run: cargo build --release --all-features --locked --target ${{ matrix.target }}
+
+      - name: Smoke-test produced Unix binary
+        if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'x86_64-apple-darwin' || matrix.target == 'aarch64-apple-darwin'
+        run: target/${{ matrix.target }}/release/moviebox-tui --version
+
+      - name: Smoke-test produced Windows binary
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: .\target\${{ matrix.target }}\release\moviebox-tui.exe --version
+
+      - name: Archive Unix
+        if: matrix.os != 'windows-latest'
+        run: |
+          mkdir dist
+          cp target/${{ matrix.target }}/release/moviebox-tui dist/
+          cp README.md dist/
+          cp LICENSE-* dist/ || true
+
+          if [ "${{ matrix.target }}" == "x86_64-unknown-linux-musl" ]; then
+            tar -czvf MovieBox_Linux_x64.tar.gz -C dist .
+          elif [ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]; then
+            tar -czvf MovieBox_Linux_arm64.tar.gz -C dist .
+          else
+            tar -czvf moviebox-tui-${{ matrix.target }}.tar.gz -C dist .
+          fi
+
+      - name: Archive Windows
+        if: matrix.os == 'windows-latest'
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "target\${{ matrix.target }}\release\moviebox-tui.exe" "dist\"
+          Copy-Item "README.md" "dist\"
+          $licenses = Get-ChildItem "LICENSE-*" -ErrorAction SilentlyContinue
+          if ($licenses) {
+            Copy-Item $licenses.FullName "dist\"
+          } else {
+            Write-Host "No license files found"
+          }
+          if ("${{ matrix.target }}" -eq "aarch64-pc-windows-msvc") {
+            Compress-Archive -Path dist\* -DestinationPath MovieBox_Windows_arm64.zip
+          } else {
+            Compress-Archive -Path dist\* -DestinationPath MovieBox_Windows_x64.zip
+          }
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: binary-${{ matrix.target }}
+          path: |
+            *.tar.gz
+            *.zip
+
+  build-macos-universal:
+    name: Build macOS Universal
+    needs: [check-version, build]
+    if: needs.check-version.outputs.is_new == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download x86_64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: binary-x86_64-apple-darwin
+          path: x86_64
+
+      - name: Download aarch64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: binary-aarch64-apple-darwin
+          path: aarch64
+
+      - name: Create Universal Binary
+        run: |
+          mkdir -p universal/dist
+          tar -xzf x86_64/moviebox-tui-x86_64-apple-darwin.tar.gz -C x86_64/
+          tar -xzf aarch64/moviebox-tui-aarch64-apple-darwin.tar.gz -C aarch64/
+          lipo -create -output universal/dist/moviebox-tui x86_64/moviebox-tui aarch64/moviebox-tui
+          cp README.md universal/dist/
+          cp LICENSE-* universal/dist/ || true
+          cd universal/dist
+          tar -czvf ../../MovieBox_macOS_Universal.tar.gz .
+
+      - name: Upload Universal Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: binary-universal-apple-darwin
+          path: MovieBox_macOS_Universal.tar.gz
+
+  release:
+    name: Create Release
+    needs: [check-version, build, build-macos-universal]
+    if: needs.check-version.outputs.is_new == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Extract Release Notes from CHANGELOG.md
+        id: changelog
+        env:
+          VERSION: ${{ needs.check-version.outputs.version }}
+        run: |
+          NOTES=$(awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { flag=1; next }
+            flag && /^## \[/ { flag=0 }
+            flag { print }
+          ' CHANGELOG.md)
+
+          if [ -z "$NOTES" ]; then
+            NOTES=$(awk '
+              /^## \[Unreleased\]/ { flag=1; next }
+              flag && /^## \[/ { flag=0 }
+              flag { print }
+            ' CHANGELOG.md)
+          fi
+
+          if [ -n "$NOTES" ]; then
+            echo "notes<<EOF" >> $GITHUB_OUTPUT
+            echo "$NOTES" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            echo "has_notes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_notes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate all expected release artifacts exist
+        run: |
+          EXPECTED=(
+            "MovieBox_Linux_x64.tar.gz"
+            "MovieBox_Linux_arm64.tar.gz"
+            "MovieBox_macOS_Universal.tar.gz"
+            "MovieBox_Windows_x64.zip"
+            "MovieBox_Windows_arm64.zip"
+          )
+          for asset in "${EXPECTED[@]}"; do
+            if ! find artifacts -type f -name "$asset" | grep -q .; then
+              echo "::error::Required release artifact '$asset' was not produced."
+              exit 1
+            fi
+            echo "✔ Found required artifact: $asset"
+          done
+
+      - name: Generate checksums
+        run: |
+          find artifacts -type f \( -name 'MovieBox_*.tar.gz' -o -name 'MovieBox_*.zip' \) -print0 |
+            sort -z |
+            while IFS= read -r -d '' file; do
+              hash=$(sha256sum "$file" | awk '{print $1}')
+              echo "$hash  $(basename "$file")"
+            done > SHA256SUMS
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            artifacts/**/MovieBox_*.tar.gz
+            artifacts/**/MovieBox_*.zip
+            SHA256SUMS
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: "v${{ needs.check-version.outputs.version }}"
+          name: "v${{ needs.check-version.outputs.version }}"
+          body: ${{ steps.changelog.outputs.notes }}
+          generate_release_notes: ${{ steps.changelog.outputs.has_notes != 'true' }}
+          files: |
+            artifacts/**/MovieBox_*.tar.gz
+            artifacts/**/MovieBox_*.zip
+            SHA256SUMS

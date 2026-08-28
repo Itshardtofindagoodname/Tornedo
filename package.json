@@ -1,6 +1,6 @@
 {
   "name": "tornedo",
-  "version": "4.2.0",
+  "version": "5.0.0",
   "description": "Local-first, terminal-native, high-performance federated torrent search and download client.",
   "type": "module",
   "repository": {
@@ -56,13 +56,16 @@
   "dependencies": {
     "better-sqlite3": "^12.2.0",
     "ink": "^7.1.1",
+    "jpeg-js": "^0.4.4",
     "parse-torrent": "^11.0.24",
+    "pngjs": "^7.0.0",
     "react": "^19.2.8",
     "webtorrent": "^3.0.21"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.0.0",
+    "@types/pngjs": "^6.0.5",
     "@types/react": "^19.2.18",
     "ink-testing-library": "^4.0.0",
     "tsx": "^4.20.3",

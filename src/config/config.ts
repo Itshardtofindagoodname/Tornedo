@@ -108,6 +108,8 @@ export interface InternetArchiveConfig {
   maxResults: number;
 }
 
+export type DownloadAction = "download" | "watch";
+
 export interface TornedoConfig {
   downloadDir: string;
   /** 0 = unlimited concurrent active downloads. */
@@ -124,6 +126,19 @@ export interface TornedoConfig {
   seedAfterComplete: boolean;
   ranking: RankingConfig;
   theme: string;
+  /**
+   * What pressing enter on the home screen does for a query:
+   * "download" = torrent search (classic Tornedo), "watch" = streaming search.
+   */
+  searchAction: DownloadAction;
+  /** Whether streaming ("Watch") providers are active at all. */
+  streamingEnabled: boolean;
+  /** Bangladesh-ISP-only BDIX providers (CircleFTP / DhakaFlix). */
+  bdixEnabled: boolean;
+  /** Preferred external player id; null/"" = auto-detect (mpv, VLC, IINA). */
+  defaultPlayer: string | null;
+  /** Where Watch-mode downloads are saved; null = downloadDir. */
+  streamDownloadDir: string | null;
   /**
    * action -> list of key names (see src/ui/keys.ts). `confirm` (enter) is the
    * download key; `download` (d) toggles a file for download in the details
@@ -198,6 +213,11 @@ export function defaultConfig(): TornedoConfig {
     diskSpaceWarningMb: 1_024,
     recoveryAutoResume: true,
     torznabProviders: [],
+    searchAction: "download",
+    streamingEnabled: true,
+    bdixEnabled: true,
+    defaultPlayer: null,
+    streamDownloadDir: null,
     internetArchive: {
       enabled: false,
       timeoutMs: 15_000,
@@ -217,7 +237,26 @@ const SOURCE_KEYS: (keyof TornedoConfig)[] = [
   "watchIntervalMs",
   "diskSpaceWarningMb",
   "recoveryAutoResume",
+  "searchAction",
+  "streamingEnabled",
+  "bdixEnabled",
+  "defaultPlayer",
+  "streamDownloadDir",
 ];
+
+const BOOLEAN_KEYS = new Set<keyof TornedoConfig>([
+  "seedAfterComplete",
+  "recoveryAutoResume",
+  "streamingEnabled",
+  "bdixEnabled",
+]);
+
+const STRING_KEYS = new Set<keyof TornedoConfig>([
+  "downloadDir",
+  "theme",
+  "defaultPlayer",
+  "streamDownloadDir",
+]);
 
 function isRanking(v: unknown): v is RankingConfig {
   if (!v || typeof v !== "object") return false;
@@ -252,10 +291,20 @@ export function normalizeConfig(raw: unknown): TornedoConfig {
 
   for (const key of SOURCE_KEYS) {
     const v = r[key];
-    if (key === "downloadDir") {
-      if (typeof v === "string" && v.trim()) out.downloadDir = v.trim();
-    } else if (key === "seedAfterComplete" || key === "recoveryAutoResume") {
+    if (BOOLEAN_KEYS.has(key)) {
       if (typeof v === "boolean") (out as unknown as Record<string, unknown>)[key] = v;
+    } else if (STRING_KEYS.has(key)) {
+      if (key === "defaultPlayer") {
+        if (v === null || (typeof v === "string" && (v.length === 0 || v === "auto"))) {
+          out.defaultPlayer = null;
+        } else if (typeof v === "string") {
+          out.defaultPlayer = v;
+        }
+      } else if (typeof v === "string" && v.trim()) {
+        (out as unknown as Record<string, unknown>)[key] = v.trim();
+      }
+    } else if (key === "searchAction") {
+      if (v === "watch" || v === "download") out.searchAction = v;
     } else if (typeof v === "number" && Number.isFinite(v) && v >= 0) {
       (out as unknown as Record<string, unknown>)[key as string] = v;
     }

@@ -1,0 +1,39 @@
+{
+  "id": "org.stremio.cinemeta",
+  "version": "3.0.12",
+  "name": "Cinemeta",
+  "description": "Official Cinemeta movie and TV catalog",
+  "resources": [
+    "catalog",
+    {
+      "name": "meta",
+      "types": ["movie", "series"],
+      "idPrefixes": ["tt"]
+    },
+    {
+      "name": "stream",
+      "types": ["movie", "series"],
+      "idPrefixes": ["tt"]
+    }
+  ],
+  "types": ["movie", "series", "anime"],
+  "catalogs": [
+    {
+      "type": "movie",
+      "id": "top",
+      "name": "Popular Movies",
+      "extra": [
+        {
+          "name": "genre",
+          "isRequired": false,
+          "options": ["Action", "Comedy", "Drama", "Sci-Fi"]
+        }
+      ]
+    },
+    {
+      "type": "series",
+      "id": "top",
+      "name": "Popular Series"
+    }
+  ]
+}
