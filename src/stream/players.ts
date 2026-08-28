@@ -90,10 +90,10 @@ function wellKnownPaths(id: PlayerId, env: NodeJS.ProcessEnv, platformOs: NodeJS
       return [
         "C:\\Program Files\\VideoLAN\\VLC\\vlc.exe",
         "C:\\Program Files (x86)\\VideoLAN\\VLC\\vlc.exe",
-        local !== "" ? `${local}\\Microsoft\\WindowsApps\\vlc.exe` : "",
-        local !== "" ? `${local}\\Programs\\VLC\\vlc.exe` : "",
-        appdata !== "" ? `${appdata}\\vlc\\vlc.exe` : "",
-        `${home}\\scoop\\shims\\vlc.exe`,
+        local !== "" ? join(local, "Microsoft", "WindowsApps", "vlc.exe") : "",
+        local !== "" ? join(local, "Programs", "VLC", "vlc.exe") : "",
+        appdata !== "" ? join(appdata, "vlc", "vlc.exe") : "",
+        join(home, "scoop", "shims", "vlc.exe"),
         "C:\\ProgramData\\chocolatey\\bin\\vlc.exe",
       ].filter(Boolean);
     }
@@ -101,9 +101,9 @@ function wellKnownPaths(id: PlayerId, env: NodeJS.ProcessEnv, platformOs: NodeJS
       return [
         "C:\\Program Files\\mpv\\mpv.exe",
         "C:\\Program Files (x86)\\mpv\\mpv.exe",
-        local !== "" ? `${local}\\Programs\\mpv\\mpv.exe` : "",
-        appdata !== "" ? `${appdata}\\mpv\\mpv.exe` : "",
-        `${home}\\scoop\\shims\\mpv.exe`,
+        local !== "" ? join(local, "Programs", "mpv", "mpv.exe") : "",
+        appdata !== "" ? join(appdata, "mpv", "mpv.exe") : "",
+        join(home, "scoop", "shims", "mpv.exe"),
         "C:\\ProgramData\\chocolatey\\bin\\mpv.exe",
       ].filter(Boolean);
     }
