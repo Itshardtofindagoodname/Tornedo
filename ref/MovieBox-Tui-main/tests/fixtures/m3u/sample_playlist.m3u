@@ -1,9 +1,0 @@
-#EXTM3U
-#EXTINF:-1 tvg-id="cnn.us" tvg-logo="https://example.com/cnn.png" group-title="News",CNN International HD
-https://stream.example.com/cnn/live.m3u8
-#EXTINF:-1 tvg-id='bbc.uk' tvg-logo='https://example.com/bbc.png' group-title='News',BBC News 24
-https://stream.example.com/bbc/live.m3u8
-#EXTINF:-1 tvg-id="espn.us" group-title="Sports",ESPN Main
-https://stream.example.com/espn/live.m3u8
-#EXTINF:-1,Discovery Channel HD
-https://stream.example.com/discovery/live.m3u8
