@@ -23,7 +23,15 @@ export interface ServeOptions {
   fileHint?: string;
   /** How long to wait for metadata before giving up (ms). */
   timeoutMs?: number;
+  /**
+   * How long to wait for the selected file to buffer at least one byte before
+   * handing the URL to the player (ms). Keeps VLC/mpv from opening on a blank
+   * screen that "never shows up". Defaults to the metadata timeout.
+   */
+  bufferingTimeoutMs?: number;
   signal?: AbortSignal;
+  /** Live playback-preparation progress, e.g. for a status banner in the UI. */
+  onProgress?: (stage: string, fraction?: number) => void;
 }
 
 /** Structural WebTorrent `File` surface the streamer depends on. */
@@ -32,6 +40,10 @@ export interface StreamableFile {
   path?: string;
   length: number;
   progress?: number;
+  downloaded?: number;
+  done?: boolean;
+  select?(): void;
+  deselect?(): void;
   createReadStream(opts?: { start?: number; end?: number }): Readable;
 }
 
@@ -99,12 +111,22 @@ export class TorrentStreamer {
   }
 
   /**
-   * Fetch a torrent's metadata in the background (no pieces, no file selection,
-   * no server) so a later serve() resolves instantly. Fire-and-forget and
-   * memoized by magnet, so repeated hugs are cheap.
+   * Fetch a torrent's metadata in the background and pre-select its best video
+   * file so pieces start buffering while the user browses — a later serve()
+   * then hands over a stream that is already ready to play, instead of waiting
+   * for the first bytes. Fire-and-forget and memoized by magnet, so repeated
+   * hugs are cheap (and never re-add).
    */
   warm(opts: ServeOptions): void {
-    void this.metadata(opts).catch(() => undefined);
+    void this.warmAndSelect(opts).catch(() => undefined);
+  }
+
+  /** Warm the engine + metadata and pre-select the video file (no server). */
+  private async warmAndSelect(opts: ServeOptions): Promise<void> {
+    const torrent = await this.metadata(opts);
+    const file = pickVideoFile(torrent.files, opts.fileHint);
+    if (file === null) return;
+    selectOnly(torrent.files, file);
   }
 
   /**
@@ -143,6 +165,7 @@ export class TorrentStreamer {
   }
 
   private async prepare(opts: ServeOptions): Promise<ServeResult> {
+    opts.onProgress?.("fetching metadata", 0);
     const torrent = await this.metadata(opts);
     const file: StreamableFile | null = pickVideoFile(torrent.files, opts.fileHint);
     if (file === null) {
@@ -151,20 +174,7 @@ export class TorrentStreamer {
     }
     // Stream only the chosen file: deselect everything else so we never fill
     // the disk with the rest of the torrent while playing.
-    for (const f of torrent.files) {
-      if (f !== file) {
-        try {
-          (f as { deselect?: () => void }).deselect?.();
-        } catch {
-          /* best effort */
-        }
-      }
-    }
-    try {
-      (file as { select?: () => void }).select?.();
-    } catch {
-      /* best effort */
-    }
+    selectOnly(torrent.files, file);
     const { server, url } = await serveFile(file);
     const entry: ActiveEntry = { torrent, server };
     this.active.add(entry);
@@ -173,7 +183,52 @@ export class TorrentStreamer {
       if (opts.signal.aborted) cleanup();
       else opts.signal.addEventListener("abort", cleanup, { once: true });
     }
+    // Buffer actually-playable bytes before telling the player to open, so VLC
+    // doesn't sit on an empty/black stream that looks like a hang. Ignored when
+    // the engine exposes no measurable progress (keeps fake/test engines fast).
+    await this.waitForBuffered(file, opts, torrent);
     return { url, file: file.name };
+  }
+
+  /**
+   * Wait until the selected file has at least one readable byte (so the player
+   * opens on real video instead of a frozen black screen), reporting progress
+   * to the UI. Files that expose no progress gauge resolve immediately.
+   */
+  private async waitForBuffered(
+    file: StreamableFile,
+    opts: ServeOptions,
+    torrent: TorrentLike,
+  ): Promise<void> {
+    const measurable =
+      (typeof file.progress === "number" && file.progress >= 0) ||
+      (typeof file.downloaded === "number" && file.downloaded >= 0);
+    if (!measurable) return;
+    const initiallyDone = file.done === true;
+    const emit = (stage: string, fraction?: number): void => opts.onProgress?.(stage, fraction);
+    if ((typeof file.downloaded === "number" && file.downloaded > 0) || initiallyDone || file.progress === 1) return;
+
+    const overallMs = opts.bufferingTimeoutMs ?? opts.timeoutMs ?? 45_000;
+    const deadline = Date.now() + overallMs;
+    emit("connecting & buffering", 0);
+    while (Date.now() < deadline) {
+      const downloaded = typeof file.downloaded === "number" ? file.downloaded : 0;
+      const progress = typeof file.progress === "number" ? file.progress : 0;
+      const done = file.done === true;
+      const fraction = file.length > 0 ? Math.min(1, downloaded / file.length) : progress;
+      if (downloaded > 0 || done || progress >= 1) {
+        emit("buffered", Math.max(0.001, fraction));
+        return;
+      }
+      if (opts.signal?.aborted) return;
+      if (fraction > 0) emit("buffering", Math.min(0.999, fraction));
+      await new Promise<void>((r) => setTimeout(r, 350));
+    }
+    // We hit the deadline with zero bytes: don't block playback forever — hand
+    // the URL over anyway so the player can try (VLC will retry), but let the
+    // UI know we timed out waiting to buffer.
+    emit("buffering timed out", 0);
+    void torrent; // keep reference for FAQ / future diagnostics
   }
 
   /** Stop streaming everything and destroy the engine. Idempotent. */
@@ -294,6 +349,27 @@ export function pickVideoFile(files: StreamableFile[], fileHint?: string): Strea
     if (matched.length > 0) return largest(matched);
   }
   return largest(pool);
+}
+
+/**
+ * Deselect every file except `file` then select `file`, so the engine fetches
+ * exactly the playable video and never fills the disk with the rest of the
+ * torrent. Idempotent and best-effort (safe for structural mocks).
+ */
+function selectOnly(files: StreamableFile[], file: StreamableFile): void {
+  for (const f of files) {
+    if (f === file) continue;
+    try {
+      (f as { deselect?: () => void }).deselect?.();
+    } catch {
+      /* best effort */
+    }
+  }
+  try {
+    (file as { select?: () => void }).select?.();
+  } catch {
+    /* best effort */
+  }
 }
 
 function stemOf(name: string): string {

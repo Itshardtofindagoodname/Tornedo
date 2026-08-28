@@ -1104,6 +1104,48 @@ describe("torrent adapter + streaming helpers", () => {
       await rm(dest, { recursive: true, force: true });
     }
   });
+
+  it("waits for the torrent to buffer before resolving serve and reports progress", async () => {
+    const magnet = "magnet:?xt=urn:btih:ABABABABABABABABABABABABABABABABABABABAB";
+    const file: StreamableFile = {
+      name: "movie.mp4",
+      path: "movie.mp4",
+      length: 1000,
+      downloaded: 0,
+      progress: 0,
+      createReadStream: () => new PassThrough(),
+    };
+    registerTorrent(magnet, [file]);
+    const streamer = new TorrentStreamer();
+    const dest = `${tmpdir()}${path.sep}tornedo-buffer-${Math.random().toString(16).slice(2)}`;
+    const stages: string[] = [];
+    try {
+      const pending = streamer.serve({
+        magnet,
+        destination: dest,
+        bufferingTimeoutMs: 5_000,
+        onProgress: (stage) => {
+          stages.push(stage);
+        },
+      });
+      // The file has no bytes yet: serve must still be pending.
+      let settled = false;
+      void pending.then(() => (settled = true)).catch(() => (settled = true));
+      await new Promise((r) => setTimeout(r, 60));
+      expect(settled).toBe(false);
+
+      // Now bytes arrive — serve should resolve without timing out.
+      file.downloaded = 400;
+      file.progress = 0.4;
+      const result = await pending;
+      expect(result.file).toBe("movie.mp4");
+      expect(settled).toBe(true);
+      expect(stages.length).toBeGreaterThan(0);
+    } finally {
+      await streamer.disposeAll();
+      await rm(dest, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("out-of-the-box configuration", () => {

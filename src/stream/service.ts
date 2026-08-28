@@ -39,6 +39,7 @@ export interface StreamServiceOptions {
     release: StreamRelease,
     mirror: StreamMirror,
     signal?: AbortSignal,
+    onProgress?: (stage: string, fraction?: number) => void,
   ) => Promise<PlaybackSource>;
   /** Overrides for internal dimension tuning (mostly tests). */
   resourcePageSize?: number;
@@ -71,6 +72,7 @@ export class StreamService {
     release: StreamRelease,
     mirror: StreamMirror,
     signal?: AbortSignal,
+    onProgress?: (stage: string, fraction?: number) => void,
   ) => Promise<PlaybackSource>;
   private tvPlaylists: TvPlaylist[] = [];
 
@@ -642,12 +644,13 @@ case "bdix_circleftp": {
     mirror: StreamMirror,
     subtitle?: string,
     signal?: AbortSignal,
+    onProgress?: (stage: string, fraction?: number) => void,
   ): Promise<PlaybackSource> {
     if (item.provider === "torrent") {
       if (this.torrentStreamer === undefined) {
         throw new StreamError("unavailable", "torrent streaming is not available", { provider: "torrent" });
       }
-      return this.torrentStreamer(release, mirror, signal);
+      return this.torrentStreamer(release, mirror, signal, onProgress);
     }
     if (item.provider === "fourkhdhub" && !mirror.directFile) {
       const resolved = await this.providers.fourkhdhub.resolveMirror(mirror, signal);

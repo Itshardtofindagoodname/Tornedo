@@ -91,7 +91,7 @@ export class Application {
       cacheDir: streamDataDir(),
       bdixEnabled: this.configState.bdixEnabled,
       torrentSearch: (query) => this.torrentWatchSearch(query),
-      torrentStreamer: (release, mirror, signal) => this.torrentPlayback(release, mirror, signal),
+      torrentStreamer: (release, mirror, signal, onProgress) => this.torrentPlayback(release, mirror, signal, onProgress),
     });
     this.favorites = new FavoritesManager(favoritesFile());
     this.history = new HistoryManager(streamHistoryFile());
@@ -269,12 +269,14 @@ export class Application {
     release: StreamRelease,
     mirror: StreamMirror,
     signal?: AbortSignal,
+    onProgress?: (stage: string, fraction?: number) => void,
   ): Promise<PlaybackSource> {
     const url = await this.getOrCreateStreamer().serve({
       magnet: mirror.resolverUrl,
       destination: path.join(streamDataDir(), "watch-stream"),
       fileHint: release.filename,
       signal,
+      onProgress,
     });
     return {
       provider: "torrent",

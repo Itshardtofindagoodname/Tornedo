@@ -112,6 +112,7 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
   const [watchResolution, setWatchResolution] = useState("");
   const [watchSubtitle, setWatchSubtitle] = useState<string | undefined>(undefined);
   const [watchDownload, setWatchDownload] = useState<WatchDownloadState | null>(null);
+  const [playbackStatus, setPlaybackStatus] = useState<string | null>(null);
   const [watchIsFav, setWatchIsFav] = useState(false);
   const [favorites, setFavorites] = useState<Favorite[]>([]);
   const [themeTick, setThemeTick] = useState(0);
@@ -247,6 +248,7 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
         goHome();
         break;
       case "watchdetails":
+        setPlaybackStatus(null);
         setView("watch");
         break;
       default:
@@ -312,6 +314,7 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
     setWatchResolution("");
     setWatchSubtitle(undefined);
     setWatchDownload(null);
+    setPlaybackStatus(null);
     setWatchMeta({ details: null, loading: true, error: null });
     setWatchReleases({ releases: [], subtitles: [], resolutions: [], loading: false, error: null, notice: null });
     void app.favorites.is(item).then(setWatchIsFav).catch(() => setWatchIsFav(false));
@@ -378,11 +381,19 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
     const season = watchSeason > 0 ? watchSeason : undefined;
     const episode = watchEpisode > 0 ? watchEpisode : undefined;
     void (async () => {
+      setPlaybackStatus(`Preparing ${player.name}…`);
       const prior = await app.history.find({ id: item.id, season, episode });
       const startSeconds = prior !== undefined && prior.time > 30 && !prior.completed ? prior.time : 0;
-      showMessage(`Playing with ${player.name}…`);
       const trackerFile = player.id === "mpv" ? await writeTrackerScript() : undefined;
-      const source = await app.streams.resolve(item, rel, mirror, watchSubtitle);
+      showMessage(`Starting ${player.name}…`);
+      const source = await app.streams.resolve(item, rel, mirror, watchSubtitle, undefined, (stage, fraction) => {
+        if (fraction !== undefined && fraction > 0 && fraction < 1) {
+          setPlaybackStatus(`${player.name}: ${stage} ${Math.round(fraction * 100)}%`);
+        } else {
+          setPlaybackStatus(`${player.name}: ${stage}…`);
+        }
+      });
+      setPlaybackStatus(null);
       const child = spawnPlayer(player, {
         url: source.url,
         headers: source.headers,
@@ -397,6 +408,7 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
         });
       }
       child.unref();
+      showMessage(`✓ ${player.name} opened — ${truncate(source.url, 44)}`);
       await app.history.record({
         provider: item.provider,
         id: item.id,
@@ -410,7 +422,10 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
         duration: 0,
         completed: false,
       });
-    })().catch((err) => showMessage(`Playback failed: ${messageOf(err)}`));
+    })().catch((err) => {
+      setPlaybackStatus(null);
+      showMessage(`Playback failed: ${messageOf(err)}`);
+    });
   };
 
   const reconcilePlayback = async (trackerFile: string, item: StreamCatalogItem, season?: number, episode?: number): Promise<void> => {
@@ -1849,6 +1864,13 @@ export function TornedoApp({ app }: TornedoAppProps): React.ReactNode {
         {view === "help" ? <HelpView app={app} /> : null}
       </Box>
       {message ? <Toast>{message}</Toast> : null}
+      {playbackStatus !== null ? (
+        <Box width="100%" height={1} backgroundColor={palette.surfaceAlt} paddingLeft={1} alignItems="center">
+          <Text color={palette.accent} bold wrap="truncate">
+            {playbackStatus}
+          </Text>
+        </Box>
+      ) : null}
       {recovery ? (
         <RecoveryBanner
           resumed={recovery.resumed.length}
