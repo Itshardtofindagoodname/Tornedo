@@ -1,0 +1,84 @@
+{
+  "name": "tornedo",
+  "version": "5.2.0",
+  "description": "Local-first, terminal-native, federated torrent search and download client.",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Itshardtofindagoodname/Tornedo.git"
+  },
+  "homepage": "https://github.com/Itshardtofindagoodname/Tornedo#readme",
+  "bugs": {
+    "url": "https://github.com/Itshardtofindagoodname/Tornedo/issues"
+  },
+  "bin": {
+    "tornedo": "dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "prepack": "npm run build",
+    "dev": "tsx src/cli.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:bench": "vitest run --bench"
+  },
+  "keywords": [
+    "torrent",
+    "torrent-client",
+    "torrent-search",
+    "downloader",
+    "magnet",
+    "p2p",
+    "bittorrent",
+    "tui",
+    "cli",
+    "terminal",
+    "seeding"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "ink": "^7.1.1",
+    "jpeg-js": "^0.4.4",
+    "parse-torrent": "^11.0.24",
+    "pngjs": "^7.0.0",
+    "react": "^19.2.8",
+    "webtorrent": "^3.0.21"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.0.0",
+    "@types/pngjs": "^6.0.5",
+    "@types/react": "^19.2.18",
+    "ink-testing-library": "^4.0.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^4.0.0"
+  },
+  "allowScripts": {
+    "better-sqlite3": true,
+    "bufferutil": true,
+    "esbuild": true,
+    "ip-set": true,
+    "node-datachannel": true,
+    "utf-8-validate": true,
+    "utp-native": true
+  }
+}

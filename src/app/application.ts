@@ -1,0 +1,341 @@
+/**
+ * Application wiring: config, database, torrent client, manager and search
+ * engine composed into one lifecycle-owned object. UI and CLI code depend on
+ * this, never on the underlying subsystems' internals.
+ */
+import type { TornedoConfig } from "../config/config.js";
+import { defaultConfig, ensureConfigMigrated, loadConfig, saveConfig } from "../config/config.js";
+import {
+  addonsFile,
+  favoritesFile,
+  streamHistoryFile,
+  tvFile,
+} from "../config/paths.js";
+import { openDatabase, openInMemoryHandle, type DatabaseHandle } from "../database/db.js";
+import { TorrentStore } from "../database/store.js";
+import { TorrentManager } from "../downloads/manager.js";
+import type { SourceAdapter } from "../model/source.js";
+import { SearchEngine } from "../search/engine.js";
+import { dynamicSources } from "../sources/dynamic.js";
+import { SOURCES } from "../sources/registry.js";
+import type { TorrentClient } from "../torrent/client.js";
+import { LazyTorrentClient } from "../torrent/lazy.js";
+import { PUBLIC_TRACKERS } from "../torrent/parse.js";
+import { SearchService } from "./search-service.js";
+import type { InstalledAddon } from "../stream/addons.js";
+import { StreamService } from "../stream/service.js";
+import type { PlaybackSource, StreamCatalogItem, StreamMirror, StreamRelease } from "../stream/models.js";
+import { adaptTorrentRelease } from "../stream/torrent-adapter.js";
+import { TorrentStreamer } from "../stream/torrent-stream.js";
+import { FavoritesManager } from "../stream/favorites.js";
+import { HistoryManager } from "../stream/history.js";
+import { JsonStore } from "../stream/store.js";
+import type { TvPlaylist } from "../stream/tv.js";
+import { streamDataDir } from "../config/paths.js";
+import path from "node:path";
+
+/** How many recent search queries are remembered (persisted across runs). */
+export const MAX_RECENT_SEARCHES = 8;
+
+const RECENT_SEARCHES_KEY = "search:recent";
+
+export interface ApplicationOptions {
+  /** Skip loading persisted config (used by tests / `config init`). */
+  freshConfig?: boolean;
+  /** In-memory database (tests). */
+  memoryDb?: boolean;
+  /** Custom torrent client (tests). */
+  client?: TorrentClient;
+  /**
+   * When false, persisted downloads are loaded into memory but not resumed and
+   * no timers are started. Used by destructive commands (`--clear`,
+   * `uninstall`) that must enumerate items without touching the network.
+   */
+  autoResume?: boolean;
+}
+
+export class Application {
+  readonly db: DatabaseHandle;
+  readonly store: TorrentStore;
+  readonly manager: TorrentManager;
+  readonly streams: StreamService;
+  readonly favorites: FavoritesManager;
+  readonly history: HistoryManager;
+  readonly addonsStore: JsonStore<InstalledAddon[]>;
+  readonly tvStore: JsonStore<TvPlaylist[]>;
+  sources: readonly SourceAdapter[];
+  healthSources: ReadonlySet<string>;
+  searchEngine!: SearchEngine;
+  searchService!: SearchService;
+
+  private configState: TornedoConfig;
+  private client: TorrentClient;
+  private suspended = false;
+  private torrentStreamer: TorrentStreamer | null = null;
+
+  private constructor(opts: ApplicationOptions) {
+    this.db = opts.memoryDb ? openMemoryHandle() : openDatabase();
+    this.store = new TorrentStore(this.db.db);
+    // The torrent engine (WebTorrent: DHT, ports, NAT, trackers) costs seconds
+    // to construct and its module import alone is ~200ms. Build it lazily on
+    // first use (dynamic import included) so a search-only session starts
+    // instantly - the engine materializes the moment a torrent is queued.
+    this.client =
+      opts.client ??
+      new LazyTorrentClient(async () => {
+        const { WebTorrentClient } = await import("../torrent/webtorrent.js");
+        return new WebTorrentClient({ announce: [...PUBLIC_TRACKERS] });
+      });
+    this.configState = defaultConfig();
+    this.streams = new StreamService({
+      cacheDir: streamDataDir(),
+      bdixEnabled: this.configState.bdixEnabled,
+      torrentSearch: (query) => this.torrentWatchSearch(query),
+      torrentStreamer: (release, mirror, signal, onProgress) => this.torrentPlayback(release, mirror, signal, onProgress),
+    });
+    this.favorites = new FavoritesManager(favoritesFile());
+    this.history = new HistoryManager(streamHistoryFile());
+    this.addonsStore = new JsonStore<InstalledAddon[]>(addonsFile());
+    this.tvStore = new JsonStore<TvPlaylist[]>(tvFile());
+    this.sources = SOURCES;
+    this.healthSources = new Set(SOURCES.filter((s) => s.reportsHealth).map((s) => s.id));
+
+    this.manager = new TorrentManager({
+      client: this.client,
+      store: this.store,
+      getConfig: () => this.configState,
+      restoreOnInit: opts.autoResume ?? true,
+    });
+
+    this.rebuildSources();
+  }
+
+  static async create(opts: ApplicationOptions = {}): Promise<Application> {
+    const app = new Application(opts);
+    await app.manager.init();
+    if (!opts.freshConfig) {
+      app.configState = await ensureConfigMigrated();
+      app.rebuildSources();
+      app.manager.applyConfig();
+    }
+    app.streams.setBdixEnabled(app.configState.bdixEnabled);
+    await app.loadStreamData();
+    return app;
+  }
+
+  /** Load the persisted addon list and live-TV playlists into the stream service. */
+  private async loadStreamData(): Promise<void> {
+    const addons = (await this.addonsStore.read()) ?? [];
+    this.streams.setAddons(addons);
+    const playlists = (await this.tvStore.read()) ?? [];
+    this.streams.setTvPlaylists(playlists);
+  }
+
+  /**
+   * Rebuild the source set from the current config. Called once config is
+   * loaded (and again on `config set` / reload) so user-configured Torznab and
+   * Internet Archive providers take effect immediately.
+   */
+  private rebuildSources(): void {
+    this.sources = [...SOURCES, ...dynamicSources(this.configState)];
+    this.healthSources = new Set(this.sources.filter((s) => s.reportsHealth).map((s) => s.id));
+    this.searchEngine = new SearchEngine({
+      sources: this.sources,
+      isEnabled: (id) => this.isSourceEnabled(id),
+      defaultTimeoutMs: 15_000,
+      maxConcurrentSources: 8,
+    });
+    this.searchService = new SearchService({
+      engine: this.searchEngine,
+      healthSources: this.healthSources,
+      getRank: () => this.configState.ranking,
+      getSources: () => this.sources,
+    });
+  }
+
+  getConfig(): TornedoConfig {
+    return this.configState;
+  }
+
+  /** Whether the streaming ("Watch") feature is usable right now. */
+  watchEnabled(): boolean {
+    return this.configState.streamingEnabled;
+  }
+
+  /** Effective folder for Watch-mode downloads. */
+  streamDownloadDir(): string {
+    return this.configState.streamDownloadDir ?? this.configState.downloadDir;
+  }
+
+  /** Save user-installed addons (persisted at the stream data dir). */
+  async setAddons(list: InstalledAddon[]): Promise<void> {
+    await this.addonsStore.write(list);
+    this.streams.setAddons(list);
+  }
+
+  /** Live-TV playlist sources currently configured for Watch mode. */
+  async streamTvPlaylists(): Promise<TvPlaylist[]> {
+    return (await this.tvStore.read()) ?? [];
+  }
+
+  /** Replace the live-TV playlist sources (persisted; used by the tv command). */
+  async setStreamTvPlaylists(list: TvPlaylist[]): Promise<void> {
+    await this.tvStore.write(list);
+    this.streams.setTvPlaylists(list);
+  }
+
+  /** The torrent engine client (used by diagnostics/doctor). */
+  getClient(): TorrentClient {
+    return this.client;
+  }
+
+  isSourceEnabled(id: string): boolean {
+    const state = this.configState.sources[id];
+    return state !== false;
+  }
+
+  setSourceEnabled(id: string, enabled: boolean): void {
+    this.configState.sources[id] = enabled;
+    void this.persistConfig();
+  }
+
+  async updateConfig(patch: Partial<TornedoConfig>): Promise<void> {
+    this.configState = { ...this.configState, ...patch };
+    await this.persistConfig();
+    this.rebuildSources();
+    this.manager.applyConfig();
+    if (patch.bdixEnabled !== undefined) this.streams.setBdixEnabled(Boolean(patch.bdixEnabled));
+  }
+
+  private async persistConfig(): Promise<void> {
+    try {
+      await saveConfig(this.configState);
+    } catch {
+      /* config persistence is best-effort */
+    }
+  }
+
+  /** Load config fresh (e.g. after the `config` command edits the file). */
+  async reloadConfig(): Promise<void> {
+    this.configState = await loadConfig();
+    this.rebuildSources();
+    this.manager.applyConfig();
+    this.streams.setBdixEnabled(Boolean(this.configState.bdixEnabled));
+  }
+
+  // --- Watch-mode torrent sources ----------------------------------------------
+
+  /** Ranked torrent releases surfaced into Watch search, mapped to catalog items. */
+  private async torrentWatchSearch(query: string): Promise<StreamCatalogItem[]> {
+    const releases = await this.searchService.searchOnce(query);
+    // Pay the WebTorrent import/construction cost now (background), so that the
+    // first play of any torrent result doesn't spend its time loading the engine.
+    if (releases.length > 0) {
+      try {
+        this.getOrCreateStreamer().warmEngine();
+      } catch {
+        /* best effort */
+      }
+    }
+    return releases.slice(0, 60).map(adaptTorrentRelease);
+  }
+
+  private getOrCreateStreamer(): TorrentStreamer {
+    if (this.torrentStreamer === null) this.torrentStreamer = new TorrentStreamer();
+    return this.torrentStreamer;
+  }
+
+  /**
+   * Kick torrent metadata + engine preparation in the background so a later
+   * play of this release opens the player immediately. The streamer memoizes by
+   * magnet, so calling this repeatedly (e.g. while the user browses releases)
+   * is cheap and idempotent.
+   */
+  warmWatchStream(release: StreamRelease, mirror: StreamMirror): void {
+    if (!mirror.resolverUrl.startsWith("magnet:")) return;
+    try {
+      void this.getOrCreateStreamer().warm({
+        magnet: mirror.resolverUrl,
+        destination: path.join(streamDataDir(), "watch-stream"),
+        fileHint: release.filename,
+      });
+    } catch {
+      /* best effort */
+    }
+  }
+
+  /** Resolve a torrent release to a local HTTP stream (WebTorrent). */
+  private async torrentPlayback(
+    release: StreamRelease,
+    mirror: StreamMirror,
+    signal?: AbortSignal,
+    onProgress?: (stage: string, fraction?: number) => void,
+  ): Promise<PlaybackSource> {
+    const url = await this.getOrCreateStreamer().serve({
+      magnet: mirror.resolverUrl,
+      destination: path.join(streamDataDir(), "watch-stream"),
+      fileHint: release.filename,
+      signal,
+      onProgress,
+    });
+    return {
+      provider: "torrent",
+      url: url.url,
+      headers: {},
+      sourceLabel: `${release.provider} | ${release.quality ?? "HD"}`,
+    };
+  }
+
+  // --- recent search history (persisted across sessions) ----------------------
+
+  private recentSearchesCache: readonly string[] | null = null;
+
+  /** Recent search queries, most recent first. Survives restarts (DB-backed). */
+  recentSearches(): readonly string[] {
+    if (this.recentSearchesCache !== null) return this.recentSearchesCache;
+    let list: string[] = [];
+    const raw = this.store.metaGet(RECENT_SEARCHES_KEY);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed)) {
+          list = parsed
+            .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
+            .slice(0, MAX_RECENT_SEARCHES);
+        }
+      } catch {
+        /* corrupted history - start fresh */
+      }
+    }
+    this.recentSearchesCache = list;
+    return this.recentSearchesCache;
+  }
+
+  /** Record a search query at the front of the persisted history. */
+  addRecentSearch(query: string): void {
+    const text = query.trim();
+    if (!text) return;
+    const next = [text, ...this.recentSearches().filter((x) => x !== text)].slice(0, MAX_RECENT_SEARCHES);
+    this.recentSearchesCache = next;
+    this.store.metaSet(RECENT_SEARCHES_KEY, JSON.stringify(next));
+  }
+
+  /** Forget the persisted recent-search history. */
+  clearRecentSearches(): void {
+    this.recentSearchesCache = [];
+    this.store.metaDelete(RECENT_SEARCHES_KEY);
+  }
+
+  /** Close everything, preserving download state. Safe to call once. */
+  async suspend(): Promise<void> {
+    if (this.suspended) return;
+    this.suspended = true;
+    await this.torrentStreamer?.disposeAll();
+    await this.manager.suspend();
+    this.db.close();
+  }
+}
+
+function openMemoryHandle(): DatabaseHandle {
+  return openInMemoryHandle();
+}

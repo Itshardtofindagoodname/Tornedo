@@ -1,0 +1,29 @@
+Tornedo makes use of the following open-source projects:
+
+MovieBox-Tui
+  https://github.com/mesamirh/MovieBox-Tui
+  MIT License. Source of the idea and design reference for Tornedo's
+  Watch-online streaming mode (streaming search, Stremio addons, player
+  integration, live TV). The streaming architecture, provider probing and
+  external-player discovery in Tornedo were modeled on and informed by
+  MovieBox-Tui; it is credited here for that inspiration.
+
+Torlink
+  https://github.com/baairon/torlink
+  MIT License. Used as design and research reference for the federated search
+  architecture and several source scraping patterns. Where its code informed
+  Tornedo adapters, the logic was re-implemented and adapted; Torlink remains
+  credited for its contribution.
+
+WebTorrent
+  https://github.com/webtorrent/webtorrent
+  MIT License. The torrent engine used behind Tornedo's TorrentClient
+  abstraction.
+
+parse-torrent
+  https://github.com/webtorrent/parse-torrent
+  MIT License. Used for magnet/.torrent parsing.
+
+better-sqlite3
+  https://github.com/WiseLibs/better-sqlite3
+  MIT License. The SQLite driver for persistence.
