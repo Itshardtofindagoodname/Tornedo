@@ -44,11 +44,6 @@ async function main(): Promise<void> {
     app = await Application.create({ autoResume: noResume ? false : undefined });
   } catch (e) {
     process.stderr.write(`failed to start: ${e instanceof Error ? e.message : String(e)}\n`);
-    if (destructive) {
-      const { wipeStateDir } = await import("./cli/commands/clear.js");
-      await wipeStateDir().catch(() => {});
-      process.stderr.write("State directory wiped.\n");
-    }
     process.exit(1);
   }
   const ctx = new CliContext(app, args);
