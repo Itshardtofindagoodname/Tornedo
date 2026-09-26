@@ -144,6 +144,9 @@ export class Application {
       isEnabled: (id) => this.isSourceEnabled(id),
       defaultTimeoutMs: 15_000,
       maxConcurrentSources: 8,
+      // Rebuilt on every config update, so `config set flaresolverr.*` takes
+      // effect on the next search without a restart.
+      flaresolverr: this.configState.flaresolverr,
     });
     this.searchService = new SearchService({
       engine: this.searchEngine,

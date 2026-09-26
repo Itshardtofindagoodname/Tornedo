@@ -13,6 +13,7 @@ import type {
   SourceFailure,
 } from "../model/source.js";
 import type { MediaCategory, SearchResult } from "../model/search.js";
+import type { FlareSolverrConfig } from "../config/config.js";
 import { CancelledError, ParseError, UnsupportedError } from "../sources/net.js";
 
 export interface SearchEngineOptions {
@@ -21,6 +22,11 @@ export interface SearchEngineOptions {
   defaultTimeoutMs: number;
   /** Max sources searched at once. */
   maxConcurrentSources: number;
+  /**
+   * FlareSolverr settings handed to adapters through `SearchContext`. Omitted
+   * (the default) leaves the proxy switched off for every source.
+   */
+  flaresolverr?: FlareSolverrConfig;
 }
 
 interface SourceOutcome {
@@ -85,7 +91,7 @@ export class SearchEngine {
     if (signal.aborted) controller.abort();
     signal.addEventListener("abort", onOuterAbort, { once: true });
 
-    const ctx: SearchContext = { signal: controller.signal, timeoutMs };
+    const ctx: SearchContext = { signal: controller.signal, timeoutMs, flaresolverr: this.opts.flaresolverr };
     let retryable = false;
     try {
       const outcome = await Promise.resolve()

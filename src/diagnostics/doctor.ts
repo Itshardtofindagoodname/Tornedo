@@ -13,6 +13,8 @@ import type { Application } from "../app/application.js";
 import { currentSchemaVersion, isOpen } from "../database/db.js";
 import { latestSchemaVersion } from "../database/migrations.js";
 import { configFile } from "../config/paths.js";
+import type { FlareSolverrConfig } from "../config/config.js";
+import { looksLikeCloudflareChallenge } from "../sources/net.js";
 
 export interface DoctorCheck {
   id: string;
@@ -48,6 +50,7 @@ export async function runDoctor(app: Application, opts: { probeSources?: boolean
   checks.push(await checkDht(app));
   checks.push(await checkTrackers(app));
   checks.push(await checkSources(app, opts.probeSources ?? false));
+  if (cfg.flaresolverr.enabled) checks.push(await checkFlareSolverr(cfg.flaresolverr));
   checks.push(checkConsistency(app));
   checks.push(checkInterrupted(app));
 
@@ -219,6 +222,7 @@ async function checkSources(app: Application, probe: boolean): Promise<DoctorChe
   }
   let healthyCount = 0;
   const failures: string[] = [];
+  const challenged: string[] = [];
   const results = await Promise.allSettled(
     enabled.map(async (s) => {
       const controller = new AbortController();
@@ -226,7 +230,13 @@ async function checkSources(app: Application, probe: boolean): Promise<DoctorChe
       try {
         const res = await fetch(s.homepage, { signal: controller.signal });
         clearTimeout(timer);
-        if (res.ok || res.status === 404 || res.status === 403 || res.status === 429) {
+        // A challenge is a 403/503 (or a 200 carrying the interstitial), so the
+        // body has to be read to tell "blocked" apart from merely "rate
+        // limited" - the two need completely different fixes.
+        const body = await res.text();
+        if (looksLikeCloudflareChallenge(res.status, body)) {
+          challenged.push(s.id);
+        } else if (res.ok || res.status === 404 || res.status === 403 || res.status === 429) {
           healthyCount++;
         } else {
           failures.push(`${s.id} (HTTP ${res.status})`);
@@ -238,14 +248,68 @@ async function checkSources(app: Application, probe: boolean): Promise<DoctorChe
     }),
   );
   void results;
-  if (failures.length === 0) {
+  // A Cloudflare block is a single, fully actionable cause: name the remedy
+  // instead of burying it under a generic unreachable-sources warning.
+  if (challenged.length > 0 && !app.getConfig().flaresolverr.enabled) {
+    return warn(
+      "sources",
+      `${challenged.join(", ")}: blocked by Cloudflare.`,
+      "Enable FlareSolverr to bypass the challenge: `tornedo config set flaresolverr.enabled true` (see the README for the Docker one-liner).",
+    );
+  }
+  if (failures.length === 0 && challenged.length === 0) {
     return ok("sources", `${healthyCount}/${enabled.length} sources reachable.`);
+  }
+  if (challenged.length > 0) {
+    return warn(
+      "sources",
+      `${healthyCount}/${enabled.length} sources reachable; ${challenged.join(", ")} served a Cloudflare challenge.`,
+      "FlareSolverr is enabled, but these sources still challenged - verify with `tornedo doctor` that the proxy is reachable and not itself rate limited.",
+    );
   }
   return warn(
     "sources",
     `${healthyCount}/${enabled.length} sources reachable; ${failures.join(", ")} unreachable.`,
     "Unreachable sources are skipped per-search, so results never break - check each site or your network.",
   );
+}
+
+/**
+ * Probe the configured FlareSolverr endpoint. Only runs when the user opted in,
+ * and only ever reads config - the feature is inert while disabled.
+ */
+async function checkFlareSolverr(cfg: FlareSolverrConfig): Promise<DoctorCheck> {
+  const base = cfg.url.replace(/\/+$/, "");
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${base}/`, { method: "GET", signal: controller.signal });
+      if (res.ok) {
+        return ok("flaresolverr", `FlareSolverr reachable at ${base} (HTTP ${res.status}).`);
+      }
+      if (res.status >= 400 && res.status < 500) {
+        return warn(
+          "flaresolverr",
+          `FlareSolverr at ${base} answered HTTP ${res.status}.`,
+          "Something is answering on that port but it is not a healthy FlareSolverr. Point flaresolverr.url at the container's port (8191 by default).",
+        );
+      }
+      return fail(
+        "flaresolverr",
+        `FlareSolverr at ${base} returned HTTP ${res.status}.`,
+        "Restart the container: `docker restart <container>`. Sources behind Cloudflare will keep failing until it responds.",
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (e) {
+    return fail(
+      "flaresolverr",
+      `FlareSolverr unreachable at ${base}: ${msg(e)}`,
+      "Start it with `docker run -d -p 8191:8191 ghcr.io/flaresolverr/flaresolverr`, or run `tornedo config set flaresolverr.enabled false` to stop depending on it.",
+    );
+  }
 }
 
 function checkConsistency(app: Application): DoctorCheck {

@@ -108,6 +108,19 @@ export interface InternetArchiveConfig {
   maxResults: number;
 }
 
+export interface FlareSolverrConfig {
+  /**
+   * Whether Cloudflare-challenged mirrors may be replayed through a local
+   * FlareSolverr instance. Off by default: with it off nothing here is read and
+   * no extra request is ever made.
+   */
+  enabled: boolean;
+  /** Base URL of the FlareSolverr container (no `/v1` suffix). */
+  url: string;
+  /** Per-request timeout in ms; also sent to FlareSolverr as `maxTimeout`. */
+  timeoutMs: number;
+}
+
 export type DownloadAction = "download" | "watch";
 
 export interface TornedoConfig {
@@ -155,6 +168,8 @@ export interface TornedoConfig {
   torznabProviders: TorznabProviderConfig[];
   /** Internet Archive provider settings. */
   internetArchive: InternetArchiveConfig;
+  /** Optional FlareSolverr proxy used to bypass Cloudflare JS challenges. */
+  flaresolverr: FlareSolverrConfig;
 }
 
 export function defaultKeybindings(): Partial<Record<KeyAction, string[]>> {
@@ -222,6 +237,11 @@ export function defaultConfig(): TornedoConfig {
       enabled: false,
       timeoutMs: 15_000,
       maxResults: 30,
+    },
+    flaresolverr: {
+      enabled: false,
+      url: "http://localhost:8191",
+      timeoutMs: 60_000,
     },
   };
 }
@@ -338,6 +358,18 @@ export function normalizeConfig(raw: unknown): TornedoConfig {
       enabled: typeof ia.enabled === "boolean" ? ia.enabled : out.internetArchive.enabled,
       timeoutMs: positiveOrUndefined(ia.timeoutMs) ?? out.internetArchive.timeoutMs,
       maxResults: clampInt(ia.maxResults, 1, 200, out.internetArchive.maxResults),
+    };
+  }
+
+  if (r.flaresolverr && typeof r.flaresolverr === "object") {
+    const fs = r.flaresolverr as Record<string, unknown>;
+    const url = typeof fs.url === "string" ? fs.url.trim().replace(/\/+$/, "") : "";
+    out.flaresolverr = {
+      enabled: typeof fs.enabled === "boolean" ? fs.enabled : out.flaresolverr.enabled,
+      // An enabled-but-empty URL would silently break every request, so fall
+      // back to the default host rather than persisting an unusable value.
+      url: url || out.flaresolverr.url,
+      timeoutMs: positiveOrUndefined(fs.timeoutMs) ?? out.flaresolverr.timeoutMs,
     };
   }
 

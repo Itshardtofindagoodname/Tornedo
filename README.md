@@ -355,6 +355,9 @@ User-configured providers are first-class sources:
   Only items with downloadable audio files are surfaced. Not a torrent swarm;
   `ia://` items cannot be queued into the torrent engine.
   Configure under `internetArchive` (disabled by default).
+- **FlareSolverr proxy**: an opt-in escape hatch for sources that sit behind
+  Cloudflare's JS challenge. Configure under `flaresolverr` (disabled by
+  default); nothing changes for you until you turn it on. See below.
 
 For music searches, the Torznab and Internet Archive providers are the
 recommended path. The HTML indexers are fallbacks that fail loudly (never
@@ -392,6 +395,7 @@ Set `TORNEDO_STATE_DIR` to relocate both (also used by the test suite).
 | `theme` | terminal theme: `default`, `mocha`, `latte`, `macchiato`, `frappe`, `nord`, `tokyonight`, `dracula`, `gruvbox`, `rosepine` |
 | `torznabProviders[]` | user-configured Torznab/Newznab endpoints (see below) |
 | `internetArchive` | Internet Archive provider settings (below) |
+| `flaresolverr` | Cloudflare challenge bypass proxy settings (below, off by default) |
 
 ### Torznab providers
 
@@ -443,6 +447,73 @@ query modes (`search` / `music` / `movie` / `tv`) it really supports.
 Enable it with `tornedo config set internetArchive.enabled true`. Nested keys
 are settable as dotted paths; add/remove Torznab entries by editing
 `config.json` (arrays cannot be appended from the CLI).
+
+### FlareSolverr (Cloudflare bypass)
+
+Some torrent sites - 1337x especially - sit behind Cloudflare's JavaScript
+challenge. When that happens Tornedo either gets an HTTP 403/503 or an
+unreadable "Just a moment..." page, and the source is reported as blocked.
+FlareSolverr is a small proxy that runs a real browser, solves the challenge and
+hands back the finished HTML, which Tornedo then parses as usual.
+
+This is **fully opt-in and off by default**: while `flaresolverr.enabled` is
+false no extra request is made, no code path is entered, and no dependency is
+required. FlareSolverr itself is a separate container you run yourself.
+
+```json
+{ "flaresolverr": { "enabled": false, "url": "http://localhost:8191", "timeoutMs": 60000 } }
+```
+
+| Field | Meaning |
+| :--- | :--- |
+| `enabled` | replay Cloudflare-challenged requests through the proxy |
+| `url` | FlareSolverr base URL, without the `/v1` suffix |
+| `timeoutMs` | per-solve timeout, also sent to FlareSolverr as `maxTimeout` |
+
+**`timeoutMs` is a ceiling, not a budget.** The effective time a solve gets is
+`min(flaresolverr.timeoutMs, the source's own timeout)` - Tornedo aborts the
+whole source first, so raising `timeoutMs` past the adapter's budget changes
+nothing and will look like dead configuration. 1337x allows itself 30s per
+search, of which ~10-15s goes to the plain direct fetch; a solve therefore has
+whatever is left of those 30s. If solves are being cut off mid-flight, the lever
+is the adapter timeout, not this one.
+
+Start the container, then point Tornedo at it:
+
+```sh
+docker run -d -p 8191:8191 ghcr.io/flaresolverr/flaresolverr
+```
+
+```sh
+tornedo config set flaresolverr.enabled true
+tornedo config set flaresolverr.url http://localhost:8191   # if not the default
+tornedo doctor                                            # confirms the proxy answers
+```
+
+This is the same integration Prowlarr and Jackett expose, so if you already run
+one of those you can share a single FlareSolverr container between them.
+
+Notes:
+
+- Only the sources that actually hit a challenge are rerouted; every other
+  request goes out directly and is unaffected.
+- Challenge detection looks for `cf-mitigated`, `_cf_chl_`,
+  `cf-browser-verification` and the "Just a moment..." interstitial.
+- With the proxy off, a blocked source says so explicitly instead of a generic
+  HTTP failure: `1337x: blocked by Cloudflare - enable FlareSolverr in config to
+  bypass`. `tornedo doctor` reports the same cause.
+- Solving a challenge costs a real browser page load, so a rerouted request is
+  markedly slower than an ordinary one. A cold container that has to start a
+  browser for the first solve is the slowest of all.
+- At most 3 solves run at once, whatever an adapter's own concurrency is. Past
+  that they queue, and the queue wait is charged to the source's timeout - so
+  the first solve is not the only one that has to fit in the window.
+- Only challenge-shaped refusals are rerouted. A 429 (rate limited), a 404 (wrong
+  path), a dead host or a 5xx origin outage is reported as itself and never
+  spends a solve, so an unrelated outage cannot quietly drain the container.
+- With the proxy off, 1337x behaves exactly as it did before: plain requests keep
+  their old per-request budget, and the longer source timeout is only spent when
+  a solve is actually attempted.
 
 ---
 

@@ -3,6 +3,7 @@
  * interface; the federated search engine is the only thing that drives them.
  */
 import type { MediaCategory, SearchResult } from "./search.js";
+import type { FlareSolverrConfig } from "../config/config.js";
 
 export type SourceGroup = "Movies" | "TV" | "Anime" | "Games" | "Music" | "General";
 
@@ -19,6 +20,13 @@ export interface SearchContext {
   signal: AbortSignal;
   /** Per-source timeout in ms. */
   timeoutMs: number;
+  /**
+   * FlareSolverr proxy settings, threaded in by the engine so an adapter can
+   * escalate a Cloudflare-challenged request without importing global config
+   * state. Undefined (or `enabled: false`) means the feature is off and the
+   * adapter must behave exactly as if it did not exist.
+   */
+  flaresolverr?: FlareSolverrConfig;
 }
 
 /** Failure modes the engine surfaces per source. */
